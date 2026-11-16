@@ -255,6 +255,21 @@ OCR (`tools/ocr.js`). Живая база не тронута, артефакт�
 
 Новые файлы тестов волны 3: `tests/test_money.py`, `tests/test_learning.py` (в предыдущих коммитах отсутствовали — вошли вместе с волной 3).
 
+### 2.13 Релиз сайдбара 0.1.2 — независимый приёмочный прогон (2026-11-17 00:52 MSK)
+
+| Команда | Результат |
+|---|---|
+| `python3 -m unittest discover -s tests -q` (3.13.14) | 335 тестов, OK, 2,0 с |
+| `PYTHONPYCACHEPREFIX=/tmp/lifeos-pyc /usr/bin/python3 -m unittest discover -s tests -q` (3.9.6) | 335 тестов, OK, 2,2 с |
+| `python3 tests/e2e_mock.py` | 47 из 47, rc=0 |
+| `PYTHONPYCACHEPREFIX=/tmp/lifeos-pyc bash check.sh` | PASS, 11 проверок |
+
+По отчёту исполнителя (sidebar-dev, t1 attempt 5; самопроверки агента): `node tools/contrast_check.js` —
+светлая: 178 узлов, 0 ниже AA, min 4,63:1; тёмная: 0 ниже AA, min 5,45:1; линии графиков
+3,21–9,28:1; фокус 7,87/9,34:1. Playwright: 0 ошибок консоли, при загрузке активен «Обзор»,
+после клика «Журнал» — «Журнал»; drawer/Esc/возврат фокуса; печать скрывает сайдбар.
+Релиз: коммит `ae29227`, тег `v0.1.2`.
+
 ## 3. Что не проверено (честные пробелы)
 
 1. **Живой Telegram**: токена нет → ни одного реального `getUpdates`/`sendMessage`.

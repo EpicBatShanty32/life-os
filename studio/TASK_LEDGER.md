@@ -49,7 +49,7 @@
 | T21 | P1 из ревью/аудитов: offset, dry-run, токен, логи | bot-core | готово | `getUpdates` offset в БД, `--dry-run` на temp-путях, токен не попадает в лог при чужом `api_base`, пути логов = README | коммит `c87d5da` |
 | T22 | Контраст дашборда и мобильная шапка | dash | готово | Правки контраста по WCAG, шапка на 390 px | коммит `c87d5da` |
 | T23 | Финансы и обучение (v0.2) | core-dev | готово | `src/storage.py`: таблицы `money`/`learning` + индексы, `add_money`/`add_learning` с валидацией, отчёты за день/неделю/месяц, парсер сумм; команды в боте | 266 тестов (`TEST_HISTORY.md` §2.12), доска: `t2` |
-| T24 | Устойчивость бота: backoff, healthcheck, ротация логов | core-dev | в работе | — | доска: `t4` |
+| T24 | Устойчивость бота: backoff, healthcheck, ротация логов | core-dev | готово | Backoff 2→60 с + retry_after ≤900 с и reset после успеха; пульс `tick:last_ok` в kv; `tools/health.py` (6 проверок, `--rotate`); long-poll 10 с; один архив лога; `ExitTimeOut 30` в plist; 65 тестов в `tests/test_resilience.py` | 335/335 на 3.13 и 3.9, check.sh PASS — §2.12–2.13, коммит `b4429ab` |
 
 ## Волна 4 — Life OS v3 (`app/`, SPA, медиа) — идёт
 
@@ -57,13 +57,15 @@
 
 | ID | Тема | Владелец | Статус | Результат | Отчёт |
 |---|---|---|---|---|---|
-| T25 | Ф1: фундамент `app/` — настройки, схема БД, FTS5, модели | api-dev | в работе | — | доска: `t5` |
+| T25 | Ф1: фундамент `app/` — настройки, схема БД, FTS5, модели | api-dev | готово | `app/server/settings.py` (env `LIFEOS_*` + config v0.x, секреты вне repr), `db.py` (13 таблиц, FTS5 `entries_fts`/`segments_fts` с триггерами, WAL, `LegacySchemaError`), `models.py` (Overview под контракт `app/web/src/api/types.ts`) | 49 тестов + компиле; прогон `pytest app/tests` 83 passed — доска: `t5` |
 | T26 | Ф5: React SPA — каркас, Sidebar 3.0, Обзор, ⌘K | web-dev | в работе | — | доска: `t6` |
-| T27 | Ф4: FastAPI — API, WebSocket, раздача медиа с Range | api-dev | ждёт T25 | — | доска: `t7` |
-| T28 | Ф2–Ф3: aiogram-бот, приём медиа, очередь задач, адаптер транскрибации | media-dev | ждёт T25 | — | доска: `t8` |
-| T29 | Ф1: движок Obsidian — дневник, курсы, здоровье (идемпотентно) | core-dev | ждёт T25 | — | доска: `t9` |
-| T30 | Ф1: сидер — 120 дней демо-данных и 2 курса с таймкодами | core-dev | ждёт T25 | — | доска: `t10` |
-| T31 | Сайдбар дашборда 0.1.2: навигация, поиск, тёмная тема, мобильная версия | sidebar-dev | в работе | — | доска: `t1` |
+| T27 | Ф4: FastAPI — API, WebSocket, раздача медиа с Range | api-dev | в работе | — | доска: `t7` |
+| T28 | Ф2–Ф3: aiogram-бот, приём медиа, очередь задач, адаптер транскрибации | media-dev | в работе | prep: `app/bot/media_store.py`, `transcribe.py` + тесты (54 проверки app/bot) | доска: `t8` |
+| T29 | Ф1: движок Obsidian — дневник, курсы, здоровье (идемпотентно) | dash-v2 | в работе | упал на 503 шлюза (attempt 1), ретрай у dash-v2 (attempt 2) | доска: `t9` |
+| T30 | Ф1: сидер — 120 дней демо-данных и 2 курса с таймкодами | core-dev | в работе | сбой шлюза (SSE), ретрай attempt 2; цель — `data/lifeos-v3.db` (D-15) | доска: `t10` |
+| T31 | Сайдбар дашборда 0.1.2: навигация, поиск, тёмная тема, мобильная версия | sidebar-dev | готово | Навигация по 10 разделам (scrollspy, свёрнутый 76px), поиск по журналу, тёмная тема AA, drawer ≤900px, `tools/contrast_check.js`; `check.sh` не падает на node_modules; VERSION/CHANGELOG/RELEASE_NOTES/llms.txt → 0.1.2 | 335/335 (оба питона), e2e 47/47, check.sh 11/11, тег `v0.1.2` — §2.13, коммит `ae29227` |
+| T33 | Deploy-артефакты VPS/мини-сервера | deploy | готово | `deploy/` 10 файлов (compose 6 сервисов, 3 Dockerfile, Caddyfile, nginx, 2 systemd, `.env.example`, `check-deploy.sh` 630) + `DEPLOY_GUIDE.md` 690; переменные bridged (D-16) | `check-deploy.sh` 119✔ 0✖; docker/systemd в среде нет — «не проверено» в §10; коммит `d0a6c9e` |
+| T34 | SPA-страницы «Журнал», «Аналитика», «Сон», «Настроение» (v3) | sidebar-dev | в работе | мок-данные по `types.ts`, свои компоненты, `pages.routes.ts`; App.tsx не трогает | доска: `t11` |
 | T32 | Дашборд 0.2: разделы «Курсы» и «Тело» | dash-v2 | ждёт SPA | — | доска: `t3` |
 
 ## Правила ведения
