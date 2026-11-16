@@ -8,4 +8,4 @@
 в sys.path), и тесты из project_root.
 """
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"

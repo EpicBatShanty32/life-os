@@ -18,8 +18,8 @@
      Контраст мелкого текста (WCAG AA, 4.5:1) — проверенные пары:
        --muted #656873 — 5.55:1 на #FFFFFF, 5.29:1 на #F9F9FD
        --faint #6C6F7A — 5.01:1 на #FFFFFF, 4.77:1 на #F9F9FD
-     Сайдбар (панель #F1F2FA): пункты #5E5D75 — 5.70:1, подписи
-     #6B6B79 — 4.70:1, активный текст #3F4157 на пилюле #EAE8F7 — 8.26:1.
+     Сайдбар (панель #F1F2FA): пункты #5E5D75 — 5.71:1, подписи
+     #686777 — 4.96:1, активный текст #3F4157 на пилюле #EAE8F7 — 8.26:1.
      Текст на пастельных плашках берёт "-ink"-варианты (≥4.5:1 на своей
      плашке), а "-deep" остаются для иконок и заливок (не-текст, ≥3:1).
      Линии графиков темнее декоративных пастелей: ≥3:1 на белом —
@@ -2281,6 +2281,7 @@
      дашборд откатывал бы её назад во время плавной прокрутки. */
   var READ_LINE_RATIO = 0.22;
   var pinned = null;
+  var jumpUntil = 0;   /* пока идёт плавная прокрутка после клика, подсветку не пересчитываем */
 
   function setActiveLink(link) {
     for (var i = 0; i < navLinks.length; i++) {
@@ -2315,7 +2316,9 @@
   function updateActiveLink() {
     if (!navLinks.length) return;
     var y = scrollOffset();
-    if (y < 12 && !pinned) {            /* верх страницы без клика — «Обзор» */
+    var jumping = Date.now() < jumpUntil;
+    if (y < 12 && !jumping) {            /* верх страницы — «Обзор» */
+      pinned = null;                     /* Home/логотип снимают закрепление клика */
       setActiveLink(navLinks[0]);
       return;
     }
@@ -2323,7 +2326,10 @@
       var pnode = sectionNode(pinned);
       if (pnode) {
         var pr = pnode.getBoundingClientRect();
-        if (pr.bottom > 0) { setActiveLink(linkOf(pinned)); return; }
+        if (jumping || (pr.bottom > 0 && pr.top < viewportHeight())) {
+          setActiveLink(linkOf(pinned));
+          return;
+        }
       }
       pinned = null;
     }
@@ -2351,6 +2357,7 @@
     var node = sectionNode(name);
     var top = node ? Math.max(0, node.getBoundingClientRect().top + scrollOffset() - 18) : 0;
     pinned = name === "top" ? null : name;
+    jumpUntil = name === "top" ? 0 : (Date.now() + (prefersReducedMotion() ? 80 : 900));
     var link = linkOf(name);
     if (link) setActiveLink(link);
     try {
@@ -2374,6 +2381,8 @@
   function restoreHash() {
     var raw = (location.hash || "").replace(/^#/, "");
     if (raw === "top") {
+      pinned = null;                    /* «Обзор» снимает закрепление пункта */
+      jumpUntil = 0;
       try { window.scrollTo(0, 0); } catch (e) {}
       updateActiveLink();
       return;

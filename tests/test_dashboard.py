@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from datetime import datetime, timedelta
@@ -312,3 +313,113 @@ class GoalProgressContractTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class SidebarTemplateTestCase(unittest.TestCase):
+    """Сайдбар дашборда v0.1.2: разделы, поиск, тема, мобильное меню.
+
+    Проверки статические — по тексту шаблона: они ловят регрессии
+    разметки (пункт меню без секции, внешний ресурс, съехавшие размеры)
+    до браузера. Поведение (контраст, фокус, прокрутка) проверяется
+    отдельно в Playwright-прогоне релиза.
+    """
+
+    SECTIONS = [
+        ("top", "Обзор"),
+        ("sec-today", "Сегодня"),
+        ("sec-goals", "Цели"),
+        ("sec-sleep", "Сон"),
+        ("sec-train", "Тренировки"),
+        ("sec-food", "Питание"),
+        ("sec-mood", "Настроение"),
+        ("sec-habits", "Привычки"),
+        ("sec-journal", "Журнал"),
+        ("sec-heat", "Активность"),
+    ]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.template_path = config_mod.project_root() / "dashboard" / "template.html"
+        if not cls.template_path.is_file():
+            raise unittest.SkipTest("dashboard/template.html отсутствует")
+        cls.html = cls.template_path.read_text(encoding="utf-8")
+
+    def test_nav_links_match_sections(self) -> None:
+        pairs = re.findall(
+            r'class="nav-a[^"]*"\s+href="#([^"]+)"\s+data-section="([^"]+)"',
+            self.html,
+        )
+        self.assertEqual(
+            pairs,
+            [(section, section) for section, _ in self.SECTIONS],
+            "пункты меню и их якоря должны идти в одном порядке",
+        )
+        for section, label in self.SECTIONS:
+            self.assertIn('id="%s"' % section, self.html, "нет секции %s" % section)
+            self.assertIn(
+                '<span class="nav-label">%s</span>' % label, self.html,
+                "нет подписи %s" % label,
+            )
+        # по умолчанию активен ровно один пункт — «Обзор»
+        self.assertEqual(self.html.count('aria-current="location"'), 1)
+        self.assertIn(
+            'href="#top" data-section="top" title="Обзор" aria-current="location"',
+            self.html,
+        )
+
+    def test_dashboard_is_self_contained(self) -> None:
+        refs = re.findall(r'(?:src|href)="([^"]+)"', self.html)
+        remote = [
+            ref for ref in refs
+            if ref.startswith(("http://", "https://", "//"))
+        ]
+        self.assertEqual(remote, [], "дашборд не должен грузить внешние ресурсы")
+        urls = re.findall(r"url\(([^)]+)\)", self.html)
+        self.assertEqual(
+            [u for u in urls if "http" in u.lower()], [],
+            "в CSS нет внешних url()",
+        )
+        self.assertIn('src="data:image/png;base64,', self.html)
+        self.assertNotIn('rel="stylesheet"', self.html)
+        self.assertNotIn("<link ", self.html)
+
+    def test_sidebar_contract(self) -> None:
+        # 228px в диапазоне 224–232 и компактные строки
+        width = re.search(r"--side-w:(\d+)px", self.html)
+        self.assertIsNotNone(width)
+        self.assertTrue(224 <= int(width.group(1)) <= 232)
+        nav_rule = re.search(r"\.nav-a\{[^}]*\}", self.html)
+        self.assertIsNotNone(nav_rule)
+        self.assertIn("font-size:13px", nav_rule.group(0))
+        self.assertIn("min-height:36px", nav_rule.group(0))
+        # свёрнутый режим, мобильный drawer, логотип
+        self.assertIn("grid-template-columns:76px minmax(0,1fr)", self.html)
+        self.assertIn("width:272px", self.html)
+        self.assertIn(".logo{width:42px", self.html)
+        self.assertIn("--side-active:#EAE8F7", self.html)
+        # тема: тёмные значения на тех же токенах + запоминание
+        self.assertIn('html[data-theme="dark"]{', self.html)
+        self.assertIn("localStorage", self.html)
+        self.assertIn('id="theme"', self.html)
+        self.assertIn('aria-pressed="false"', self.html)
+        self.assertIn('name="theme-color"', self.html)
+        # поиск: горячие клавиши и счётчик
+        self.assertIn('id="q"', self.html)
+        self.assertIn('"найдено "', self.html)
+        self.assertIn('e.metaKey || e.ctrlKey', self.html)
+        self.assertIn('e.key === "/"', self.html)
+
+    def test_active_section_is_computed_after_render(self) -> None:
+        # наверху страницы — «Обзор», последний пункт не форсируется
+        self.assertIn("y < 12 && !jumping", self.html)
+        self.assertIn("setActiveLink(navLinks[0])", self.html)
+        # состояние из адреса восстанавливаем после отрисовки карточек:
+        # до неё высоты секций нулевые и активным был бы «низ страницы»
+        boot = self.html[self.html.index("function boot()"):]
+        for render in ("renderToday()", "renderFeed()", "renderHeatmap()", "renderCharts()"):
+            self.assertLess(boot.index(render), boot.index("restoreHash();"),
+                            "%s должен идти до restoreHash()" % render)
+        # прокрутка и клик ведут к секции, а не к подмене экранов
+        self.assertIn('window.addEventListener("scroll", onScroll', self.html)
+        self.assertIn('navigate(this.getAttribute("data-section")', self.html)
+        self.assertNotIn("is-off", self.html)

@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#F6F7FB">
+<script>document.documentElement.classList.add('js');</script>
 <title>Life OS — личная операционная система в Telegram</title>
 <meta name="description" content="Презентация проекта Life OS: Telegram-бот, Obsidian и локальный дашборд.">
 <style>
@@ -330,7 +333,7 @@ html.js:not(.deck-ready) .slide.active .anim{
    5. ТИТУЛЬНЫЙ СЛАЙД
    ============================================================ */
 .s1 .slide-inner{
-    padding:50px 96px 58px;
+    padding:50px 96px 96px;
 }
 .s1-top{
     display:flex;
@@ -374,6 +377,19 @@ html.js:not(.deck-ready) .slide.active .anim{
 }
 .s1-eyebrow .line{
     width:34px;height:1px;background:var(--line);
+}
+.s1-wordmark{
+    font-family:var(--font-display);
+    font-size:24px;
+    line-height:1;
+    font-weight:600;
+    letter-spacing:-.015em;
+    text-transform:none;
+    color:var(--ink);
+}
+.s1-slash{
+    color:var(--muted-ink);
+    font-weight:400;
 }
 .s1 h1{
     margin:0;
@@ -431,7 +447,7 @@ html.js:not(.deck-ready) .slide.active .anim{
 }
 .s1-foot .tags i{
     font-style:normal;
-    color:var(--muted);
+    color:var(--muted-ink);
 }
 .s1-hint{
     font-family:var(--font-mono);
@@ -505,7 +521,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     text-align:center;
 }
 .orbit-core .k{
-    font:500 11px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.18em;
     text-transform:uppercase;
     color:var(--muted-ink);
@@ -547,7 +563,7 @@ html.js:not(.deck-ready) .slide.active .anim{
 .time small{
     display:block;
     margin-top:3px;
-    font:400 10px/1 var(--font-ui);
+    font:400 12px/1 var(--font-ui);
     letter-spacing:.06em;
     color:var(--muted-ink);
 }
@@ -614,7 +630,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     gap:6px;
 }
 .frag .k{
-    font:600 10.5px/1 var(--font-mono);
+    font:600 12px/1 var(--font-mono);
     letter-spacing:.14em;
     text-transform:uppercase;
     color:var(--muted-ink);
@@ -671,7 +687,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     line-height:1;
 }
 .center-miss small{
-    font:500 9.5px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.16em;
     text-transform:uppercase;
     color:var(--muted-ink);
@@ -714,7 +730,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     display:flex;
     justify-content:space-between;
     align-items:center;
-    font:500 11px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.16em;
     text-transform:uppercase;
     color:var(--muted-ink);
@@ -734,6 +750,14 @@ html.js:not(.deck-ready) .slide.active .anim{
     line-height:1.5;
     color:var(--muted-ink);
 }
+.step-art{
+    flex:1;
+    min-height:120px;
+    margin:12px 0 6px;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+}
 .step-meta{
     margin-top:auto;
     padding-top:20px;
@@ -742,6 +766,115 @@ html.js:not(.deck-ready) .slide.active .anim{
     color:var(--muted-ink);
     overflow-wrap:anywhere;
 }
+.art-chat{
+    width:250px;
+    display:flex;
+    flex-direction:column;
+    gap:9px;
+}
+.art-bubble{
+    height:38px;
+    padding:0 12px;
+    border-radius:12px 12px 12px 4px;
+    border:1px solid var(--line-soft);
+    background:var(--bg);
+    display:flex;
+    align-items:center;
+}
+.art-bubble span{
+    display:block;
+    height:5px;
+    width:62%;
+    border-radius:999px;
+    background:rgba(23,24,28,.12);
+}
+.art-bubble--me{
+    align-self:flex-end;
+    background:var(--lav-t);
+    border-color:transparent;
+    border-radius:12px 12px 4px 12px;
+}
+.art-bubble--me span{width:46%;background:rgba(161,139,183,.55);}
+.art-bubble--short{width:72%;}
+.art-bubble--short span{width:78%;}
+.art-note{
+    width:196px;
+    height:152px;
+    padding:20px 18px 16px;
+    background:var(--bg);
+    border:1px solid var(--line-soft);
+    border-radius:10px;
+    box-shadow:0 12px 24px -20px rgba(23,24,28,.3);
+    display:flex;
+    flex-direction:column;
+    gap:9px;
+    position:relative;
+}
+.art-note::before{
+    content:"";
+    position:absolute;
+    left:0;top:18px;
+    width:4px;height:28px;
+    border-radius:0 4px 4px 0;
+    background:var(--mint);
+}
+.art-note .an-title{
+    display:block;
+    height:7px;
+    width:56%;
+    border-radius:999px;
+    background:rgba(23,24,28,.2);
+    margin-bottom:4px;
+}
+.art-note .an-line{
+    display:block;
+    height:5px;
+    width:100%;
+    border-radius:999px;
+    background:rgba(23,24,28,.09);
+}
+.art-note .an-line:nth-child(3){width:84%;}
+.art-note .an-line:nth-child(4){width:92%;}
+.art-note .an-mark{
+    display:block;
+    margin-top:4px;
+    height:16px;
+    width:58%;
+    border-radius:5px;
+    background:var(--mint-t);
+    border:1px solid rgba(174,222,194,.8);
+}
+.art-grid{
+    width:214px;
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:8px;
+}
+.art-grid span{
+    display:block;
+    height:62px;
+    border-radius:10px;
+    background:var(--bg);
+    border:1px solid var(--line-soft);
+    position:relative;
+}
+.art-grid span::before{
+    content:"";
+    position:absolute;
+    left:12px;top:13px;
+    width:16px;height:16px;
+    border-radius:5px;
+    background:var(--lav-t);
+}
+.art-grid span::after{
+    content:"";
+    position:absolute;
+    left:12px;bottom:13px;
+    width:48%;height:5px;
+    border-radius:999px;
+    background:rgba(23,24,28,.1);
+}
+
 .flow-arrow{
     display:grid;
     place-items:center;
@@ -775,6 +908,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     min-height:0;
     display:grid;
     grid-template-columns:repeat(5,1fr);
+    grid-template-rows:1fr 1fr;
     gap:16px;
     margin-top:30px;
 }
@@ -802,7 +936,7 @@ html.js:not(.deck-ready) .slide.active .anim{
 .feat .num{
     position:absolute;
     right:16px;top:16px;
-    font:500 11px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.08em;
     color:var(--muted-ink);
 }
@@ -821,9 +955,10 @@ html.js:not(.deck-ready) .slide.active .anim{
     color:var(--muted-ink);
 }
 .feat .tag{
-    margin-top:auto;
-    padding-top:12px;
-    font:500 10.5px/1 var(--font-mono);
+    position:absolute;
+    left:20px;
+    bottom:15px;
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.06em;
     color:var(--ink);
 }
@@ -871,7 +1006,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     display:flex;
     align-items:center;
     gap:8px;
-    font:500 10px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.14em;
     text-transform:uppercase;
     color:var(--muted-ink);
@@ -947,13 +1082,13 @@ html.js:not(.deck-ready) .slide.active .anim{
     border-radius:999px;
     background:var(--bg);
     border:1px solid var(--line-soft);
-    font:500 10.5px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     color:var(--muted-ink);
     white-space:nowrap;
 }
 .s5-foot{
     margin-top:14px;
-    font:500 11.5px/1.5 var(--font-mono);
+    font:500 12px/1.5 var(--font-mono);
     letter-spacing:.02em;
     color:var(--muted-ink);
 }
@@ -981,7 +1116,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     grid-template-columns:1fr 44px 1fr 44px 1fr 44px 1fr;
     align-items:stretch;
     margin-top:26px;
-    max-height:390px;
+    max-height:430px;
 }
 .pipe{
     position:relative;
@@ -1009,7 +1144,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     justify-content:space-between;
     align-items:center;
     gap:10px;
-    font:500 10.5px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.13em;
     text-transform:uppercase;
     color:var(--muted-ink);
@@ -1032,7 +1167,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     margin-top:auto;
     padding-top:13px;
     border-top:1px dashed var(--line);
-    font:500 11.5px/1.5 var(--font-mono);
+    font:500 12px/1.5 var(--font-mono);
     color:var(--muted-ink);
     overflow-wrap:anywhere;
 }
@@ -1042,13 +1177,43 @@ html.js:not(.deck-ready) .slide.active .anim{
     font-size:23px;
     color:var(--lav);
 }
+.s6-notes{
+    flex:none;
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:1px;
+    margin-top:18px;
+    border:1px solid var(--line-soft);
+    border-radius:16px;
+    background:var(--line);
+    overflow:hidden;
+}
+.s6-note{
+    display:flex;
+    align-items:flex-start;
+    gap:13px;
+    padding:16px 20px;
+    background:var(--card);
+}
+.s6-note b{
+    display:block;
+    font-size:14px;
+    line-height:1.35;
+    font-weight:600;
+}
+.s6-note p{
+    margin:3px 0 0;
+    font-size:12.5px;
+    line-height:1.4;
+    color:var(--muted-ink);
+}
 .s6-band{
     flex:none;
     display:flex;
     justify-content:space-between;
     align-items:center;
     gap:28px;
-    margin-top:20px;
+    margin-top:18px;
     padding-top:16px;
     border-top:1px solid var(--line);
     font-size:13.5px;
@@ -1067,7 +1232,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     grid-template-columns:360px 300px 1fr;
     gap:24px;
     margin-top:4px;
-    max-height:610px;
+    max-height:600px;
 }
 .msg-card{
     padding:26px 24px;
@@ -1080,7 +1245,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     gap:11px;
 }
 .msg-k{
-    font:500 10.5px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.14em;
     text-transform:uppercase;
     color:var(--muted-ink);
@@ -1110,7 +1275,7 @@ html.js:not(.deck-ready) .slide.active .anim{
 .msg .who{
     display:block;
     margin-bottom:4px;
-    font:500 9px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.12em;
     text-transform:uppercase;
     color:var(--muted-ink);
@@ -1146,8 +1311,8 @@ html.js:not(.deck-ready) .slide.active .anim{
     font-weight:600;
 }
 .route-step .rn{
-    font:500 10px/1.5 var(--font-mono);
-    color:var(--lav);
+    font:500 12px/1.5 var(--font-mono);
+    color:var(--muted-ink);
 }
 .router .note{
     margin-top:auto;
@@ -1176,7 +1341,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     display:flex;
     align-items:center;
     gap:10px;
-    font:500 10px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.12em;
     text-transform:uppercase;
     color:var(--muted-ink);
@@ -1292,7 +1457,7 @@ html.js:not(.deck-ready) .slide.active .anim{
 }
 .stat .k{
     margin-top:14px;
-    font:500 11px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.13em;
     text-transform:uppercase;
     color:var(--muted-ink);
@@ -1314,7 +1479,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     min-height:0;
 }
 .s8-gaps .gk{
-    font:500 10.5px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.14em;
     text-transform:uppercase;
     color:var(--muted-ink);
@@ -1354,7 +1519,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     margin-top:auto;
     padding-top:14px;
     border-top:1px solid var(--line);
-    font:500 10.5px/1.5 var(--font-mono);
+    font:500 12px/1.5 var(--font-mono);
     letter-spacing:.01em;
     color:var(--muted-ink);
 }
@@ -1369,9 +1534,10 @@ html.js:not(.deck-ready) .slide.active .anim{
     grid-template-columns:repeat(3,1fr);
     gap:20px;
     margin-top:6px;
-    max-height:610px;
+    max-height:640px;
 }
 .sec{
+    position:relative;
     padding:27px 27px 23px;
     background:var(--card);
     border:1px solid var(--line-soft);
@@ -1430,6 +1596,33 @@ html.js:not(.deck-ready) .slide.active .anim{
 .sec--local li::before{background:var(--mint);}
 .sec--sand li::before{background:var(--blue);}
 .sec li b{color:var(--ink);font-weight:600;}
+.sec-ghost{
+    position:absolute;
+    right:12px;bottom:8px;
+    opacity:.055;
+    pointer-events:none;
+}
+.sec-ghost svg{width:132px;height:132px;}
+.sec-foot{
+    position:relative;
+    z-index:1;
+    margin-top:auto;
+    padding-top:16px;
+    border-top:1px dashed var(--line);
+    display:flex;
+    flex-wrap:wrap;
+    gap:6px;
+}
+.sec-foot span{
+    display:inline-block;
+    padding:5px 7px;
+    border-radius:6px;
+    background:var(--bg);
+    border:1px solid var(--line-soft);
+    font:500 12px/1 var(--font-mono);
+    color:var(--muted-ink);
+    white-space:nowrap;
+}
 .s9-risk{
     flex:none;
     display:flex;
@@ -1457,7 +1650,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     grid-template-columns:repeat(4,1fr);
     gap:20px;
     margin-top:42px;
-    max-height:540px;
+    max-height:590px;
 }
 .s10-timeline::before{
     content:"";
@@ -1484,7 +1677,9 @@ html.js:not(.deck-ready) .slide.active .anim{
 .tl--three .tl-dot{background:var(--blue);box-shadow:0 0 0 1px var(--blue);}
 .tl--four .tl-dot{background:var(--peach);box-shadow:0 0 0 1px var(--peach);}
 .tl-card{
+    position:relative;
     height:100%;
+    overflow:hidden;
     padding:22px 22px 20px;
     background:var(--card);
     border:1px solid var(--line-soft);
@@ -1499,7 +1694,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     padding:5px 9px;
     border-radius:999px;
     background:var(--mint-t);
-    font:500 9.5px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.1em;
     text-transform:uppercase;
     color:var(--ink);
@@ -1516,7 +1711,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     letter-spacing:-.015em;
 }
 .tl .ver{
-    font:500 10.5px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.1em;
     color:var(--muted-ink);
     text-transform:uppercase;
@@ -1528,11 +1723,24 @@ html.js:not(.deck-ready) .slide.active .anim{
     color:var(--muted-ink);
 }
 .tl-meta{
+    position:relative;
+    z-index:1;
     margin-top:auto;
     padding-top:14px;
     border-top:1px dashed var(--line);
-    font:500 10.5px/1.4 var(--font-mono);
+    font:500 12px/1.4 var(--font-mono);
     color:var(--muted-ink);
+}
+.tl-big{
+    position:absolute;
+    right:10px;
+    bottom:4px;
+    font-family:var(--font-display);
+    font-size:104px;
+    line-height:.8;
+    letter-spacing:-.05em;
+    color:rgba(23,24,28,.045);
+    pointer-events:none;
 }
 .s10-next{
     flex:none;
@@ -1552,7 +1760,7 @@ html.js:not(.deck-ready) .slide.active .anim{
 /* ============================================================
    15. ФИНАЛ
    ============================================================ */
-.s11 .slide-inner{padding-bottom:74px;}
+.s11 .slide-inner{padding-bottom:102px;}
 .s11 .s-title{font-size:88px;}
 .s11-body{
     flex:1;
@@ -1584,7 +1792,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     display:grid;
     place-items:center;
     background:var(--lav-t);
-    font:500 11px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     color:var(--ink);
 }
 .step-row h3{
@@ -1622,7 +1830,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     gap:8px;
     padding:0 18px;
     border-bottom:1px solid rgba(246,247,251,.13);
-    font:500 10.5px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.06em;
     color:rgba(246,247,251,.52);
 }
@@ -1659,7 +1867,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     align-items:center;
     gap:10px;
     margin-top:14px;
-    font:500 11px/1.45 var(--font-mono);
+    font:500 12px/1.45 var(--font-mono);
     color:var(--muted-ink);
 }
 .term-note::before{
@@ -1705,7 +1913,7 @@ html.js:not(.deck-ready) .slide.active .anim{
 .ctrl-arrow:focus-visible{outline:2px solid var(--ink);outline-offset:2px;}
 .ctrl-arrow:disabled{opacity:.28;cursor:default;background:var(--card);border-color:var(--line);}
 .dots{display:flex;align-items:center;gap:0;}
-.dot{
+.ndot{
     width:24px;height:30px;
     padding:0;
     border:0;
@@ -1715,7 +1923,7 @@ html.js:not(.deck-ready) .slide.active .anim{
     justify-content:center;
     cursor:pointer;
 }
-.dot::before{
+.ndot::before{
     content:"";
     width:6px;height:6px;
     border-radius:999px;
@@ -1723,16 +1931,16 @@ html.js:not(.deck-ready) .slide.active .anim{
     opacity:.38;
     transition:width .25s var(--ease), background .25s ease, opacity .25s ease;
 }
-.dot:hover::before{opacity:.72;}
-.dot:focus-visible{outline:2px solid var(--ink);outline-offset:1px;border-radius:999px;}
-.dot.active::before{
+.ndot:hover::before{opacity:.72;}
+.ndot:focus-visible{outline:2px solid var(--ink);outline-offset:1px;border-radius:999px;}
+.ndot.active::before{
     width:20px;
     background:var(--lav);
     opacity:1;
 }
 .counter{
     min-width:52px;
-    font:500 11px/1 var(--font-mono);
+    font:500 12px/1 var(--font-mono);
     letter-spacing:.08em;
     color:var(--muted-ink);
     font-variant-numeric:tabular-nums;
@@ -1752,6 +1960,19 @@ html.js:not(.deck-ready) .slide.active .anim{
     color:var(--ink);
 }
 
+/* На невысоких 16:9-экранах панель управления компактнее, чтобы
+   не наезжать на нижнюю строку слайда. */
+@media (max-height:820px){
+    .deck-controls{
+        bottom:10px;
+        gap:10px;
+        padding:6px 10px;
+    }
+    .ctrl-arrow{width:30px;height:30px;font-size:13px;}
+    .ndot{width:20px;height:24px;}
+    .counter{font-size:11px;}
+}
+
 @media (max-width:560px){
     .deck-controls{
         gap:6px;
@@ -1759,13 +1980,22 @@ html.js:not(.deck-ready) .slide.active .anim{
         bottom:12px;
     }
     .ctrl-arrow{width:30px;height:30px;font-size:13px;}
-    .dot{width:18px;height:26px;}
-    .dot.active::before{width:15px;}
+    .ndot{width:18px;height:26px;}
+    .ndot.active::before{width:15px;}
     .counter{display:none;}
 }
 @media (max-width:380px){
-    .dot{width:16px;}
+    .ndot{width:16px;}
     .deck-controls{gap:4px;}
+}
+
+/* Печать: без анимации прозрачности и без потери фонов */
+@media print{
+    html,body{
+        -webkit-print-color-adjust:exact;
+        print-color-adjust:exact;
+    }
+    .slide{transition:none !important;}
 }
 </style>
 </head>
@@ -1786,7 +2016,7 @@ html.js:not(.deck-ready) .slide.active .anim{
       <div class="s1-main">
         <div class="s1-copy">
           <div class="s1-eyebrow anim" style="--d:.08s">
-            <span class="line" aria-hidden="true"></span>Telegram · Obsidian · локальный дашборд
+            <span class="line" aria-hidden="true"></span><span class="s1-wordmark">Life OS</span><span class="s1-slash">/</span>Telegram · Obsidian · локальный дашборд
           </div>
           <h1 class="anim" style="--d:.14s">Личная<br><span class="it">операционная</span><br>система</h1>
           <div class="s1-in anim" style="--d:.22s">в Telegram</div>
@@ -1898,6 +2128,13 @@ html.js:not(.deck-ready) .slide.active .anim{
           <div class="step-k"><span>01 / Вход</span><span class="sq" aria-hidden="true"></span></div>
           <h3>Telegram</h3>
           <p>Три слота в день, свободный текст и команды. Отвечать можно одной фразой.</p>
+          <div class="step-art" aria-hidden="true">
+            <div class="art-chat">
+              <div class="art-bubble"><span></span></div>
+              <div class="art-bubble art-bubble--me"><span></span></div>
+              <div class="art-bubble art-bubble--short"><span></span></div>
+            </div>
+          </div>
           <div class="step-meta">long polling · один chat_id</div>
         </article>
         <div class="flow-arrow" aria-hidden="true">→</div>
@@ -1905,6 +2142,15 @@ html.js:not(.deck-ready) .slide.active .anim{
           <div class="step-k"><span>02 / Заметки</span><span class="sq sq--mint" aria-hidden="true"></span></div>
           <h3>Obsidian</h3>
           <p>Ежедневная заметка в твоём vault. Чужой текст не трогается.</p>
+          <div class="step-art" aria-hidden="true">
+            <div class="art-note">
+              <span class="an-title"></span>
+              <span class="an-line"></span>
+              <span class="an-line"></span>
+              <span class="an-line"></span>
+              <span class="an-mark"></span>
+            </div>
+          </div>
           <div class="step-meta">01 Daily/YYYY-MM-DD.md</div>
         </article>
         <div class="flow-arrow" aria-hidden="true">→</div>
@@ -1912,12 +2158,15 @@ html.js:not(.deck-ready) .slide.active .anim{
           <div class="step-k"><span>03 / Экран</span><span class="sq sq--blue" aria-hidden="true"></span></div>
           <h3>Дашборд</h3>
           <p>Локальная HTML-страница: карточки, графики, журнал и поиск.</p>
+          <div class="step-art" aria-hidden="true">
+            <div class="art-grid"><span></span><span></span><span></span><span></span></div>
+          </div>
           <div class="step-meta">dashboard/index.html</div>
         </article>
       </div>
 
       <div class="s3-foot anim" style="--d:.46s">
-        <span class="note">Всё, кроме Telegram, работает <b>на Mac</b>.</span>
+        <span class="note">База, заметки и дашборд — <b>на Mac</b>.</span>
         <span class="tags">
           <span class="chip chip--mint"><span class="dot" aria-hidden="true"></span>данные локально</span>
           <span class="chip chip--blue"><span class="dot" aria-hidden="true"></span>LLM — по желанию</span>
@@ -2030,7 +2279,7 @@ html.js:not(.deck-ready) .slide.active .anim{
             <span class="hs-k">пример заголовка · 08:30</span>
             <div class="hs-q">Доброе утро</div>
             <div class="hs-sub">понедельник, 16 ноября</div>
-            <div class="hs-note">После 5:00 — «Доброе утро», после 12:00 — «Добрый день», после 18:00 — «Добрый вечер».</div>
+            <div class="hs-note">До 5:00 — «Доброй ночи», до 12:00 — «Доброе утро», до 18:00 — «Добрый день», дальше — «Добрый вечер».</div>
           </div>
         </div>
 
@@ -2133,7 +2382,13 @@ html.js:not(.deck-ready) .slide.active .anim{
         </article>
       </div>
 
-      <div class="s6-band anim" style="--d:.50s">
+      <div class="s6-notes anim" style="--d:.48s">
+        <div class="s6-note"><div><b>Идемпотентно</b><p>Маркер на запись: повтор не дублирует.</p></div></div>
+        <div class="s6-note"><div><b>Отложенная запись</b><p>Vault недоступен — written=0 и повтор.</p></div></div>
+        <div class="s6-note"><div><b>Один процесс</b><p>pid-lock; launchd держит процесс живым.</p></div></div>
+      </div>
+
+      <div class="s6-band anim" style="--d:.54s">
         <span><b>launchd:</b> com.lifeos.agent · RunAtLoad + KeepAlive · логи в ~/Library/Logs/LifeOS/agent.log</span>
         <span><b>Python 3.9+</b> · только stdlib · без pip и npm</span>
       </div>
@@ -2146,12 +2401,12 @@ html.js:not(.deck-ready) .slide.active .anim{
   <section class="slide s7" aria-label="LLM-маршрутизация и запасной путь" aria-hidden="true">
     <div class="slide-inner">
       <div class="s-head anim" style="--d:.02s">
-        <span class="s-kicker"><span class="n">07</span><span class="bar" aria-hidden="true"></span>Мозг</span>
+        <span class="s-kicker"><span class="n">07</span><span class="bar" aria-hidden="true"></span>LLM-роутер</span>
         <span class="s-page">07 / 11</span>
       </div>
 
       <h2 class="s-title anim" style="--d:.08s">Свободный текст — и запасной путь</h2>
-      <p class="lead anim" style="--d:.14s">Сначала команды и правила. LLM включается только для свободного текста и только если есть ключ.</p>
+      <p class="lead anim" style="--d:.14s">Сначала команды и правила. LLM — для свободного текста и уточнений, если есть ключ.</p>
 
       <div class="s7-grid">
         <div class="msg-card anim" style="--d:.18s">
@@ -2168,7 +2423,7 @@ html.js:not(.deck-ready) .slide.active .anim{
           <h3>Разбор</h3>
           <div class="route-step"><span class="rn">01</span><span><b>Команда или алиас</b> → действие</span></div>
           <div class="route-step"><span class="rn">02</span><span><b>Правило или эвристика</b> → метрика</span></div>
-          <div class="route-step"><span class="rn">03</span><span><b>Свободный текст</b> → LLM, если включён</span></div>
+          <div class="route-step"><span class="rn">03</span><span><b>Свободный текст и уточнения</b> → LLM, если включён</span></div>
           <p class="note">LLM не обязателен: бот работает и без него.</p>
         </div>
 
@@ -2196,7 +2451,7 @@ html.js:not(.deck-ready) .slide.active .anim{
 
       <div class="s7-key anim" style="--d:.44s">
         <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="10.5" width="14" height="9.5" rx="2.4"/><path d="M8.2 10.5V8a3.8 3.8 0 0 1 7.6 0v2.5"/><path d="M12 14.4v1.8"/></svg>
-        <span>Ключ хранится в <b>~/.dsh/.credentials.yaml</b>. <span class="mono">install.sh</span> переносит его в <span class="mono">config.json</span> с правами 600 и не печатает. В логи и git ключ не попадает.</span>
+        <span>Ключ — в <b>~/.dsh/.credentials.yaml</b>. <span class="mono">install.sh</span> переносит его в <span class="mono">config.json</span> с правами 600 и не печатает. В логи и git ключ не попадает.</span>
         <span class="sep" aria-hidden="true"></span>
         <span class="aside"><span class="mono">llm.enabled=false</span> — без внешних запросов, кроме Telegram.</span>
       </div>
@@ -2243,7 +2498,7 @@ html.js:not(.deck-ready) .slide.active .anim{
             <div class="big">73<small>/100</small></div>
             <div>
               <div class="k">UX-ревью, до правок</div>
-              <div class="sub">Safari 1440 / 1024 / 390; часть замечаний закрыта после</div>
+              <div class="sub">Safari 1440 / 1024 / 390. Часть замечаний закрыта после ревью.</div>
             </div>
           </article>
         </div>
@@ -2258,7 +2513,7 @@ html.js:not(.deck-ready) .slide.active .anim{
             <li><b>Боевая Obsidian</b> — тесты на temp-vault; личная база не тронута.</li>
             <li><b>Повторный UX</b> — оценка после правок не зафиксирована; проверяется.</li>
           </ul>
-          <div class="src">Счёт тестов после v0.2-правок — проверяется.<br>Источник: studio/TEST_HISTORY.md, §1–2; studio/RELEASE_NOTES.md.</div>
+          <div class="src">Счёт тестов после v0.2-правок в журнал не внесён — проверяется.<br>Источник: studio/TEST_HISTORY.md, §1–2; studio/RELEASE_NOTES.md.</div>
         </aside>
       </div>
     </div>
@@ -2288,9 +2543,11 @@ html.js:not(.deck-ready) .slide.active .anim{
           <ul>
             <li><b>config.json</b> — 600, каталог data — 700, база — 600.</li>
             <li>Токен не печатается в логах и в repr.</li>
-            <li>Ключ LLM и токен не попадают в git: config/, data/ и логи закрыты .gitignore.</li>
+            <li>Ключ LLM и токен не попадают в git: config/config.json, data/ и логи закрыты .gitignore.</li>
             <li><b>check.sh</b> ищет sk-… и токены ботов в проекте.</li>
           </ul>
+          <span class="sec-ghost" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="10.5" width="14" height="9.5" rx="2.4"/><path d="M8.2 10.5V8a3.8 3.8 0 0 1 7.6 0v2.5"/><path d="M12 14.4v1.8"/></svg></span>
+          <div class="sec-foot"><span>config.json 600</span><span>data/ 700</span><span>lifeos.db 600</span></div>
         </article>
 
         <article class="sec sec--local anim" style="--d:.26s">
@@ -2302,10 +2559,12 @@ html.js:not(.deck-ready) .slide.active .anim{
           </div>
           <ul>
             <li>SQLite, Obsidian-vault и дашборд лежат на Mac.</li>
-            <li>Наружу — только Telegram; LLM-шлюз включается отдельно.</li>
+            <li>Наружу — Telegram и, при включённом LLM, его шлюз.</li>
             <li><span class="mono">llm.enabled=false</span> → внешних запросов, кроме Telegram, нет.</li>
             <li>Дашборд — один HTML без CDN, внешних шрифтов и картинок из сети.</li>
           </ul>
+          <span class="sec-ghost" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 10.5 12 4l7.5 6.5"/><path d="M6.5 9v9.5h11V9"/><path d="M10 18.5v-5h4v5"/></svg></span>
+          <div class="sec-foot"><span>на Mac</span><span>SQLite</span><span>vault</span><span>dashboard</span></div>
         </article>
 
         <article class="sec sec--sand anim" style="--d:.32s">
@@ -2321,6 +2580,8 @@ html.js:not(.deck-ready) .slide.active .anim{
             <li>SQL — только параметры; <span class="mono">&lt;script&gt;</span> в данных экранируется.</li>
             <li><span class="mono">--dry-run</span> не пишет рабочее состояние.</li>
           </ul>
+          <span class="sec-ghost" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5 12 3l8 4.5v9L12 21l-8-4.5z"/><path d="m4 7.5 8 4.5 8-4.5"/><path d="M12 12v9"/></svg></span>
+          <div class="sec-foot"><span>tests/tmp</span><span>temp-vault</span><span>mock Bot API</span></div>
         </article>
       </div>
 
@@ -2353,6 +2614,7 @@ html.js:not(.deck-ready) .slide.active .anim{
             <span class="ver">v0.1.1</span>
             <p>Три слота, команды, launchd, 150 тестов. Первый рабочий контур.</p>
             <div class="tl-meta">VERSION = 0.1.1</div>
+            <span class="tl-big" aria-hidden="true">0.1</span>
           </div>
         </article>
         <article class="tl tl--two anim" style="--d:.26s">
@@ -2363,6 +2625,7 @@ html.js:not(.deck-ready) .slide.active .anim{
             <span class="ver">v0.2</span>
             <p><span class="mono">/spend</span>, <span class="mono">/income</span>, <span class="mono">/fin</span>, <span class="mono">/learn</span>; таблицы money и learning; тесты.</p>
             <div class="tl-meta">выпуск ещё не оформлен</div>
+            <span class="tl-big" aria-hidden="true">0.2</span>
           </div>
         </article>
         <article class="tl tl--three anim" style="--d:.32s">
@@ -2373,6 +2636,7 @@ html.js:not(.deck-ready) .slide.active .anim{
             <span class="ver">v0.3</span>
             <p>Следующий экран. Состав и сроки фиксируются отдельно.</p>
             <div class="tl-meta">без даты</div>
+            <span class="tl-big" aria-hidden="true">0.3</span>
           </div>
         </article>
         <article class="tl tl--four anim" style="--d:.38s">
@@ -2383,6 +2647,7 @@ html.js:not(.deck-ready) .slide.active .anim{
             <span class="ver">запуск</span>
             <p>Нужен токен @BotFather и chat_id. <span class="mono">install.sh --dry-run</span> уже проходит.</p>
             <div class="tl-meta">приёмка 7/7 по ТЗ</div>
+            <span class="tl-big" aria-hidden="true">→</span>
           </div>
         </article>
       </div>
@@ -2412,7 +2677,7 @@ html.js:not(.deck-ready) .slide.active .anim{
           <div class="steps">
             <div class="step-row anim" style="--d:.20s">
               <span class="step-n">01</span>
-              <div><h3>Токен бота</h3><p>Создать у @BotFather и скопировать.</p></div>
+              <div><h3>Токен бота</h3><p>Создать бота у @BotFather и скопировать токен.</p></div>
             </div>
             <div class="step-row anim" style="--d:.24s">
               <span class="step-n">02</span>
@@ -2424,7 +2689,7 @@ html.js:not(.deck-ready) .slide.active .anim{
             </div>
             <div class="step-row anim" style="--d:.32s">
               <span class="step-n">04</span>
-              <div><h3>Запуск</h3><p><span class="mono">bash install.sh</span> → LaunchAgent → первый слот.</p></div>
+              <div><h3>Запуск</h3><p><span class="mono">bash install.sh</span> → LaunchAgent → /start.</p></div>
             </div>
           </div>
 
@@ -2466,8 +2731,6 @@ html.js:not(.deck-ready) .slide.active .anim{
 </noscript>
 
 <script>
-document.documentElement.classList.add('js');
-
 (function () {
   'use strict';
 
@@ -2490,7 +2753,7 @@ document.documentElement.classList.add('js');
   var dots = slides.map(function (slide, i) {
     var b = document.createElement('button');
     b.type = 'button';
-    b.className = 'dot';
+    b.className = 'ndot';
     b.setAttribute('aria-label', 'Слайд ' + pad(i + 1));
     b.addEventListener('click', function () { go(i); });
     dotsWrap.appendChild(b);
@@ -2544,6 +2807,14 @@ document.documentElement.classList.add('js');
     }
 
     var key = e.key;
+
+    /* Пробел на кнопке или точке должен активировать её, а не листать
+       ещё раз: иначе фокусная навигация прыгает через слайд. */
+    if ((key === ' ' || key === 'Spacebar') && t && t.closest &&
+        t.closest('button, a, [role="button"]')) {
+      return;
+    }
+
     var handled = true;
 
     if (key === 'ArrowRight' || key === 'PageDown') {

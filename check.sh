@@ -104,11 +104,14 @@ check_example_config() {
 }
 
 # Файлы проекта без личных данных, логов и кэша — то, где ищем секреты.
+# node_modules сторонних пакетов не проверяем: это чужой код, а строки
+# вроде «-webkit-mask-box-image» ложно срабатывают на шаблон «sk-…».
 build_file_list() {
   find . \
     -path ./.git -prune -o \
     -path ./data -prune -o \
     -path ./tests/tmp -prune -o \
+    -name node_modules -prune -o \
     -name __pycache__ -prune -o \
     -type f \
     ! -name '*.pyc' \
