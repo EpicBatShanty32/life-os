@@ -19,10 +19,13 @@ SIGTERM/SIGINT завершают работу аккуратно.
 from __future__ import annotations
 
 import argparse
+import atexit
 import logging
 import os
+import shutil
 import signal
 import sys
+import tempfile
 import time
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -107,25 +110,36 @@ class PidLock:
 
 # ============================================================== ЛОГИРОВАНИЕ
 def _setup_logging(cfg: dict, console_level: int = logging.WARNING) -> logging.Logger:
-    """Логи в <root>/<paths.logs>/agent.log с ротацией 5 МБ."""
-    logs_dir = Path(config_mod.resolve_path(cfg, cfg["paths"]["logs"]))
+    """Логи в ``<root>/<paths.logs>/agent.log`` (ротация 5 МБ) — на корне.
+
+    Файловый и консольный handlers вешаются на корневой logger, чтобы в лог
+    попадали не только ``lifeos.*``, но и ``src.llm`` / ``src.parsing`` /
+    ``src.dashboard_data`` (REVIEW P1-4). Повторный вызов не плодит handlers:
+    добавленные здесь помечаются и снимаются.
+    """
+    env_logs = os.environ.get("LIFEOS_LOG_DIR", "").strip()
+    logs_value = env_logs or cfg["paths"]["logs"]
+    logs_dir = Path(config_mod.resolve_path(cfg, logs_value))
     try:
         logs_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:  # не фатально: останутся только stderr-логи
         print("Не удалось создать каталог логов %s: %s" % (logs_dir, exc), file=sys.stderr)
     log_path = logs_dir / "agent.log"
 
-    logger = logging.getLogger("lifeos")
-    logger.setLevel(logging.INFO)
-    logger.propagate = False
-    for handler in list(logger.handlers):  # повторный вызов main в тестах
-        logger.removeHandler(handler)
-        try:
-            handler.close()
-        except Exception:  # noqa: BLE001
-            pass
-
     formatter = logging.Formatter(LOG_FORMAT, datefmt=LOG_DATEFMT)
+    root = logging.getLogger()
+
+    # Снимаем только те handlers, которые поставили мы сами (иначе при
+    # повторном вызове в одном процессе файл/open дублировались бы).
+    for handler in list(root.handlers):
+        if getattr(handler, "_lifeos_managed", False):
+            root.removeHandler(handler)
+            try:
+                handler.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    root.setLevel(logging.INFO)
     try:
         file_handler = RotatingFileHandler(
             str(log_path), maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT,
@@ -133,14 +147,27 @@ def _setup_logging(cfg: dict, console_level: int = logging.WARNING) -> logging.L
         )
         file_handler.setFormatter(formatter)
         file_handler.setLevel(logging.INFO)
-        logger.addHandler(file_handler)
+        file_handler._lifeos_managed = True  # type: ignore[attr-defined]
+        root.addHandler(file_handler)
     except OSError as exc:
         print("Не удалось открыть лог-файл %s: %s" % (log_path, exc), file=sys.stderr)
 
     console = logging.StreamHandler(sys.stderr)
     console.setFormatter(formatter)
     console.setLevel(console_level)
-    logger.addHandler(console)
+    console._lifeos_managed = True  # type: ignore[attr-defined]
+    root.addHandler(console)
+
+    # lifeos.* пишет в корень; своих handlers у него больше нет.
+    logger = logging.getLogger("lifeos")
+    logger.setLevel(logging.INFO)
+    logger.propagate = True
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+        try:
+            handler.close()
+        except Exception:  # noqa: BLE001
+            pass
     return logger
 
 
@@ -159,6 +186,45 @@ def _vault_call(vault, method_name: str, logger: logging.Logger, *args, **kwargs
     except Exception:  # noqa: BLE001
         logger.exception("Vault.%s завершился ошибкой — продолжаю работу", method_name)
         return None
+
+
+def _app_timezone(cfg: dict) -> ZoneInfo:
+    """Таймзона приложения из ``app.timezone`` (fallback — Москва)."""
+    name = str((cfg.get("app") or {}).get("timezone") or "Europe/Moscow").strip()
+    try:
+        return ZoneInfo(name)
+    except Exception:  # noqa: BLE001 — config уже проверил, это страховка
+        return ZoneInfo("Europe/Moscow")
+
+
+def _kv_get_int(storage, key: str) -> int | None:
+    """Безопасно читает неотрицательное int из kv (пусто/битое → None)."""
+    if storage is None:
+        return None
+    try:
+        raw = storage.kv_get(key)
+    except Exception:  # noqa: BLE001 — БД может быть закрыта
+        return None
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    if not text:
+        return None
+    try:
+        value = int(text)
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _kv_set_int(storage, key: str, value: int, logger: logging.Logger) -> None:
+    """Пишет int в kv, не роняя цикл из-за ошибки БД."""
+    if storage is None or value is None:
+        return
+    try:
+        storage.kv_set(key, str(int(value)))
+    except Exception:  # noqa: BLE001
+        logger.exception("Не удалось сохранить %s в kv", key)
 
 
 class DryRunTelegram:
@@ -193,15 +259,32 @@ def _sleep(stop: dict, seconds: float) -> None:
 
 
 def _handle_updates(updates: list, offset: int | None, scheduler,
-                    tz: ZoneInfo, logger: logging.Logger) -> int | None:
-    """Разбирает апдейты Telegram, возвращает новый offset."""
+                    tz: ZoneInfo, logger: logging.Logger, storage=None,
+                    last_update_id: int | None = None
+                    ) -> tuple[int | None, int | None]:
+    """Разбирает апдейты Telegram, возвращает ``(offset, last_update_id)``.
+
+    Offset сохраняется в kv после обработки пачки, ``last_update_id`` — после
+    каждого апдейта. Второй нужен для дедупликации, если Telegram переотдаст
+    уже обработанный апдейт после рестарта/сбоя (REVIEW P1-1).
+    """
+    advanced = False
     for update in updates:
+        if not isinstance(update, dict):
+            continue
+        update_id = update.get("update_id")
+        uid = update_id if isinstance(update_id, int) and not isinstance(update_id, bool) else None
+
+        # Дедупликация: всё, что уже обрабатывали, повторно не исполняем.
+        if uid is not None and last_update_id is not None and uid <= last_update_id:
+            logger.info("Пропускаю повторный update_id=%d (уже обработан)", uid)
+            offset = max(offset or 0, uid + 1)
+            advanced = True
+            continue
+
+        if uid is not None:
+            offset = uid + 1
         try:
-            if not isinstance(update, dict):
-                continue
-            update_id = update.get("update_id")
-            if isinstance(update_id, int):
-                offset = update_id + 1
             message = update.get("message")
             if not isinstance(message, dict):
                 continue
@@ -214,7 +297,18 @@ def _handle_updates(updates: list, offset: int | None, scheduler,
                                  datetime.now(tz))
         except Exception:  # noqa: BLE001 — один кривой апдейт не должен ронять цикл
             logger.exception("Ошибка обработки обновления Telegram")
-    return offset
+        finally:
+            # Отмечаем апдейт обработанным даже при ошибке: иначе «ядовитый»
+            # апдейт будет вечно переотдаваться и блокировать очередь.
+            if uid is not None:
+                advanced = True
+                if last_update_id is None or uid > last_update_id:
+                    last_update_id = uid
+                    _kv_set_int(storage, "last_update_id", last_update_id, logger)
+
+    if advanced and offset is not None:
+        _kv_set_int(storage, "tg_offset", offset, logger)
+    return offset, last_update_id
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -251,6 +345,29 @@ def main(argv: list[str] | None = None) -> int:
     )
     logger.info("Конфиг: %s", cfg.get("_config_path"))
 
+    # 1a. --dry-run полностью изолирован от боевого состояния (REVIEW P1-2):
+    # своя временная БД (вместе с kv), без Obsidian и без платных вызовов LLM.
+    dry_run_dir: str | None = None
+    if args.dry_run:
+        try:
+            dry_run_dir = tempfile.mkdtemp(prefix="lifeos-dryrun-")
+        except OSError as exc:
+            logger.error("Dry-run: не удалось создать временный каталог: %s", exc)
+            return 2
+        cfg["paths"]["db"] = os.path.join(dry_run_dir, "lifeos.db.dryrun")
+        cfg["paths"]["dashboard_out"] = os.path.join(
+            dry_run_dir, "dashboard", "index.html"
+        )
+        cfg.setdefault("obsidian", {})["enabled"] = False
+        cfg.setdefault("llm", {})["enabled"] = False
+        # На случай аварийного выхода (SIGKILL/ранний return) — уберёт temp.
+        atexit.register(shutil.rmtree, dry_run_dir, True)
+        logger.info(
+            "DRY-RUN: состояние не сохраняется — боевые БД/kv и Obsidian не трогаю; "
+            "временные данные: %s",
+            dry_run_dir,
+        )
+
     # 2. Модули проекта (свои и смежников — по контрактам INTERFACES).
     try:
         from src import scheduler as scheduler_mod
@@ -285,20 +402,38 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
 
-    # 4. Хранилище.
+    # 4. Хранилище: время пишется в таймзоне приложения (а не жёстко МСК).
+    tz = _app_timezone(cfg)
     db_path = config_mod.resolve_path(cfg, cfg["paths"]["db"])
     try:
-        storage = storage_mod.Storage(db_path)
+        storage = storage_mod.Storage(db_path, tz=tz)
     except Exception as exc:  # noqa: BLE001
         logger.error("Не удалось открыть базу данных %s: %s", db_path, exc)
         return 2
-    logger.info("База данных: %s", db_path)
+    logger.info("База данных: %s (таймзона: %s)", db_path, tz)
+
+    # Восстанавливаем позицию в очереди Telegram и защиту от повторной
+    # доставки (REVIEW P1-1). Битое/пустое значение молча считаем отсутствием.
+    offset = _kv_get_int(storage, "tg_offset")
+    if offset is not None and offset <= 0:
+        offset = None
+    last_update_id = _kv_get_int(storage, "last_update_id")
+    if offset is not None and last_update_id is None:
+        # offset уже подтверждает всё, что меньше него.
+        last_update_id = offset - 1
+    if offset is not None or last_update_id is not None:
+        logger.info(
+            "Telegram: восстановлено из kv offset=%s, last_update_id=%s",
+            offset, last_update_id,
+        )
 
     # 5. LLM (мозг). Без модуля работать нечему — это ошибка сборки проекта.
     try:
         from src import llm as llm_mod
 
         llm = llm_mod.LLM(cfg)
+        if args.dry_run:
+            logger.info("LLM: выключен (dry-run) — платных вызовов не будет")
         if llm.available():
             logger.info("LLM доступен: %s", (cfg.get("llm") or {}).get("model") or "—")
         else:
@@ -312,25 +447,29 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     # 6. Obsidian и дашборд — опциональные части: без них бот живёт.
+    # В dry-run Vault вообще не создаём: ни чтения, ни записи, ни каталогов.
     vault = None
-    try:
-        from src import obsidian as obsidian_mod
+    if args.dry_run:
+        logger.info("Obsidian: выключен (dry-run) — vault не читается и не пишется")
+    else:
+        try:
+            from src import obsidian as obsidian_mod
 
-        vault = obsidian_mod.Vault(cfg, storage=storage)
-        obsidian_cfg = cfg.get("obsidian") or {}
-        vault_path = config_mod.resolve_path(cfg, str(obsidian_cfg.get("vault_path") or "."))
-        if obsidian_cfg.get("enabled", True) and not Path(vault_path).is_dir():
-            logger.warning(
-                "Папка Obsidian не найдена: %s — записи будут копиться в БД "
-                "и допишутся, когда база появится.",
-                vault_path,
+            vault = obsidian_mod.Vault(cfg, storage=storage)
+            obsidian_cfg = cfg.get("obsidian") or {}
+            vault_path = config_mod.resolve_path(cfg, str(obsidian_cfg.get("vault_path") or "."))
+            if obsidian_cfg.get("enabled", True) and not Path(vault_path).is_dir():
+                logger.warning(
+                    "Папка Obsidian не найдена: %s — записи будут копиться в БД "
+                    "и допишутся, когда база появится.",
+                    vault_path,
+                )
+            logger.info(
+                "Obsidian: %s (%s)",
+                vault_path, "включён" if obsidian_cfg.get("enabled", True) else "выключен",
             )
-        logger.info(
-            "Obsidian: %s (%s)",
-            vault_path, "включён" if obsidian_cfg.get("enabled", True) else "выключен",
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Модуль Obsidian недоступен — запись в дневник отключена: %s", exc)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Модуль Obsidian недоступен — запись в дневник отключена: %s", exc)
 
     # Дозапись того, что не дошло до Obsidian в прошлом запуске (после сбоя, без сети и т.п.).
     synced = _vault_call(vault, "sync_pending", logger)
@@ -364,12 +503,14 @@ def main(argv: list[str] | None = None) -> int:
         cfg, storage, tg, llm, vault, dash_build, logging.getLogger("lifeos.scheduler")
     )
 
-    # 9. Pid-лок: только для длительной работы (--once не мешает живому агенту).
+    # 9. Pid-лок: и обычный запуск, и --once (иначе второй процесс будет
+    # конкурировать за getUpdates и «уведёт» апдейты у живого бота). Только
+    # dry-run не берёт лок: он не опрашивает Telegram и не пишет боевое kv.
     # Дневной ролловер (sync_pending + rewrite_goals + дашборд) выполняет
     # scheduler.tick() — по контракту INTERFACES §8 п.3; main вызывает tick()
     # на каждом проходе цикла.
     lock = PidLock(_ROOT / PID_RELATIVE_PATH)
-    if not args.once:
+    if not args.dry_run:
         ok, reason = lock.acquire()
         if not ok:
             logger.error("Запуск отменён: %s", reason)
@@ -390,13 +531,6 @@ def main(argv: list[str] | None = None) -> int:
         except (ValueError, OSError):  # не главный поток (например, тесты)
             pass
 
-    tz_name = str((cfg.get("app") or {}).get("timezone") or "Europe/Moscow")
-    try:
-        tz = ZoneInfo(tz_name)
-    except Exception:  # noqa: BLE001 — config уже проверил, это страховка
-        tz = ZoneInfo("Europe/Moscow")
-
-    offset: int | None = None
     auth_errors = 0
     poll_timeout = 0 if args.once else 20
     logger.info("Цикл запущен (timeout=%s c, тик каждые %s c)", poll_timeout,
@@ -437,7 +571,10 @@ def main(argv: list[str] | None = None) -> int:
                 _sleep(stop, 0 if args.once else 2)
             else:
                 auth_errors = 0
-                offset = _handle_updates(updates, offset, scheduler, tz, logger)
+                offset, last_update_id = _handle_updates(
+                    updates, offset, scheduler, tz, logger,
+                    storage=storage, last_update_id=last_update_id,
+                )
 
             # --- 2. Тик планировщика ------------------------------------
             try:
@@ -457,6 +594,12 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:  # noqa: BLE001
             logger.exception("Ошибка при закрытии БД")
         lock.release()
+        if dry_run_dir:
+            try:
+                shutil.rmtree(dry_run_dir, ignore_errors=True)
+                logger.info("DRY-RUN: временные данные удалены (боевое состояние не менялось)")
+            except Exception:  # noqa: BLE001
+                logger.exception("Dry-run: не удалось удалить временный каталог")
         logger.info("Life OS остановлен")
 
     return exit_code

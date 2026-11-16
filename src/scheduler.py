@@ -212,6 +212,9 @@ class Scheduler:
             self.max_followups = 2
         self.schedule = self.cfg.get("schedule") or {}
         self.app_cfg = self.cfg.get("app") or {}
+        # Итог последней сборки дашборда: нужен ролловеру, чтобы не отмечать
+        # день успешным при упавшем dash_build (REVIEW P2.5).
+        self._dashboard_ok = True
 
     # ================================================================ ВРЕМЯ
     def _local(self, now: datetime | None = None) -> datetime:
@@ -300,6 +303,97 @@ class Scheduler:
             return False
         return _text(self.storage.kv_get("paused")).strip() in {"1", "true", "yes", "on"}
 
+    # ------------------------------------------------------------ онбординг
+    def _onboarding_required(self) -> bool:
+        """Знакомство перед первым вопросом включается флагом app.onboarding."""
+        return bool(self.app_cfg.get("onboarding"))
+
+    def _is_onboarded(self) -> bool:
+        if self.storage is None:
+            return True
+        return _text(self.storage.kv_get("onboarded")).strip() == "1"
+
+    def _mark_onboarded(self) -> None:
+        if self.storage is None:
+            return
+        try:
+            self.storage.kv_set("onboarded", "1")
+            self.storage.kv_set("onboarded_at", datetime.now().astimezone().isoformat(timespec="seconds"))
+            self.storage.kv_del("onboarding_choice")
+        except Exception:  # noqa: BLE001
+            self.log.exception("Не удалось сохранить флаг онбординга")
+
+    def _quiet_window(self) -> tuple[int, int] | None:
+        spec = self.app_cfg.get("quiet_hours")
+        if not isinstance(spec, (list, tuple)) or len(spec) != 2:
+            return None
+        start = self._parse_time(spec[0])
+        end = self._parse_time(spec[1])
+        if start is None or end is None:
+            return None
+        return (start[0] * 60 + start[1], end[0] * 60 + end[1])
+
+    def _in_quiet_hours(self, now: datetime) -> bool:
+        window = self._quiet_window()
+        if window is None:
+            return False
+        start, end = window
+        if start == end:
+            return False
+        current = now.hour * 60 + now.minute
+        if start < end:
+            return start <= current < end
+        return current >= start or current < end
+
+    def _onboarding_text(self) -> str:
+        name = _text(self.app_cfg.get("name")) or "Life OS"
+        return (
+            "Привет! Я %s — дневник-собеседник.\n\n"
+            "Несколько раз в день спрашиваю про дела, тело и голову и складываю "
+            "ответы в твой Obsidian на этом Mac.\n\n"
+            "Дальше я напишу сам: утром — про план, днём — про еду и силы, "
+            "вечером — про итоги. Отвечать можно свободным текстом.\n\n"
+            "Начать сейчас? Напиши «да» или «вечером».\n\n"
+            "Приватность: записи хранятся локально. Если включены «умные» "
+            "уточнения (llm.enabled), текст ответов уходит на api.samp.team — "
+            "их можно выключить в config.json, и тогда всё останется только у тебя."
+            % name
+        )
+
+    def _quiet_text(self) -> str:
+        return (
+            "Поздно уже, не буду грузить вопросами. Напиши, если хочешь что-то "
+            "записать, — сохраню. Или продолжим утром."
+        )
+
+    def _handle_onboarding_choice(self, chat_id: int, text: str, now: datetime) -> bool:
+        """Первое сообщение после знакомства: «да» — начать, «вечером» — ждать.
+
+        Возвращает True, если сообщение обработано как выбор онбординга.
+        """
+        low = text.strip().lower().strip("!.,… ")
+        start_words = {"да", "начать", "сейчас", "давай", "давай сейчас", "поехали", "ок", "окей"}
+        wait_words = {"вечером", "потом", "нет", "позже", "не сейчас", "в следующий раз"}
+        if low in start_words:
+            self._mark_onboarded()
+            if self._in_quiet_hours(now):
+                self._send(chat_id, self._quiet_text())
+                return True
+            hour = now.hour
+            slot = "morning" if hour < 12 else ("midday" if hour < 18 else "evening")
+            self._start_session(slot, now)
+            return True
+        if low in wait_words:
+            self._mark_onboarded()
+            self._send(
+                chat_id,
+                "Договорились. Напишу в ближайший слот — а если что-то захочется "
+                "записать раньше, просто пиши сюда.",
+            )
+            return True
+        self._send(chat_id, "Напиши «да», чтобы начать сейчас, или «вечером» — подожду до вечера.")
+        return True
+
     def _questions(self, slot: str) -> list[str]:
         """Скриптованные вопросы слота из prompts с fallback-набором."""
         questions: list[str] = []
@@ -328,16 +422,21 @@ class Scheduler:
 
     # ============================================================ TICK / СЛОТЫ
     def tick(self, now: datetime) -> None:
-        """Периодический вызов из main: слоты, просроченные сессии, ролловер."""
+        """Периодический вызов из main: просроченные сессии, слоты, ролловер.
+
+        Сначала закрываем/напоминаем про зависшую сессию, и только потом
+        проверяем слоты: иначе сессия вчерашнего дня блокирует старт
+        сегодняшнего слота до следующего тика (REVIEW P2.4).
+        """
         now = self._local(now)
-        try:
-            self._tick_slots(now)
-        except Exception:  # noqa: BLE001
-            self.log.exception("tick: ошибка при запуске слота")
         try:
             self._tick_overdue(now)
         except Exception:  # noqa: BLE001
             self.log.exception("tick: ошибка при проверке просроченных сессий")
+        try:
+            self._tick_slots(now)
+        except Exception:  # noqa: BLE001
+            self.log.exception("tick: ошибка при запуске слота")
         try:
             self._tick_rollover(now)
         except Exception:  # noqa: BLE001
@@ -361,6 +460,10 @@ class Scheduler:
         """1) Если не пауза и время слота пришло — начать сессию."""
         if self._is_paused():
             return
+        if self._onboarding_required() and not self._is_onboarded():
+            return  # сначала знакомство (/start), потом вопросы
+        if self._in_quiet_hours(now):
+            return  # тихие часы: не будим вопросами
         if self._load_session() is not None:
             return  # одна сессия за раз
 
@@ -527,22 +630,41 @@ class Scheduler:
         return self._local(parsed) if parsed.tzinfo else parsed.replace(tzinfo=self.tz)
 
     def _tick_rollover(self, now: datetime) -> None:
-        """3) Раз в день: досинхронизировать Obsidian и пересобрать дашборд."""
+        """3) Раз в день: досинхронизировать Obsidian и пересобрать дашборд.
+
+        Маркер ``last_rollover`` пишется только после успешной работы: если
+        vault/дашборд упали, следующий тик повторит ролловер в этот же день
+        (REVIEW P2.5), а не отложит его до завтра.
+        """
         today = now.date().isoformat()
         try:
             if _text(self.storage.kv_get("last_rollover")) == today:
                 return
-            self.storage.kv_set("last_rollover", today)
         except Exception:  # noqa: BLE001
-            self.log.exception("Ролловер: не удалось обновить kv")
+            self.log.exception("Ролловер: не удалось прочитать kv")
             return
         self.log.info("Ролловер дня %s", today)
-        self._sync_vault()
-        self._rewrite_goals()
-        self._write_mirror_safe()
+
+        sync_ok = self._sync_vault() >= 0
+        goals_ok = self._rewrite_goals()
+        mirror_ok = self._write_mirror_safe()
         self._rebuild_dashboard()
+        dash_ok = self._dashboard_ok
+        if not (sync_ok and goals_ok and mirror_ok and dash_ok):
+            self.log.warning(
+                "Ролловер дня %s завершился с ошибками — повторю на следующем тике",
+                today,
+            )
+            return
+        try:
+            self.storage.kv_set("last_rollover", today)
+        except Exception:  # noqa: BLE001
+            self.log.exception(
+                "Ролловер: не удалось сохранить last_rollover — повторю на следующем тике"
+            )
 
     def _sync_vault(self) -> int:
+        """Досинхронизация Obsidian; -1 — ошибка (для повтора ролловера)."""
         if self.vault is None or not hasattr(self.vault, "sync_pending"):
             return 0
         try:
@@ -550,27 +672,33 @@ class Scheduler:
             written = int(written or 0)
         except Exception:  # noqa: BLE001
             self.log.exception("Vault.sync_pending упал")
-            return 0
+            return -1
         if written:
             self.log.info("Досинхронизировано записей в Obsidian: %d", written)
         return written
 
-    def _rewrite_goals(self) -> None:
+    def _rewrite_goals(self) -> bool:
+        """True — готово (в т.ч. если vault нет), False — ошибка."""
         if self.vault is None or not hasattr(self.vault, "rewrite_goals"):
-            return
+            return True
         try:
             self.vault.rewrite_goals()
         except Exception:  # noqa: BLE001
             self.log.exception("Vault.rewrite_goals упал")
+            return False
+        return True
 
     def _rebuild_dashboard(self) -> str | None:
         if self.dash_build is None:
+            self._dashboard_ok = True
             return None
         try:
             path = self.dash_build(self.cfg, self.storage)
         except Exception:  # noqa: BLE001
             self.log.exception("Сборка дашборда упала")
+            self._dashboard_ok = False
             return None
+        self._dashboard_ok = bool(path)
         return path if isinstance(path, str) else None
 
     # ============================================================== ВХОДЯЩИЕ
@@ -604,6 +732,15 @@ class Scheduler:
             if command is not None:
                 self._handle_command(command[0], command[1], chat_id, now)
                 return
+
+            # Первый выбор после знакомства («да» / «вечером») — до сессий.
+            if (
+                self._onboarding_required()
+                and not self._is_onboarded()
+                and _text(self.storage.kv_get("onboarding_choice")).strip() == "1"
+            ):
+                if self._handle_onboarding_choice(chat_id, stripped, now):
+                    return
 
             session = self._load_session()
             if session is not None:
@@ -647,7 +784,17 @@ class Scheduler:
 
     def _handle_command(self, command: str, args: str, chat_id: int, now: datetime) -> None:
         if command == "start":
-            self._send(chat_id, self._start_text())
+            if self._onboarding_required() and not self._is_onboarded():
+                self.storage.kv_set("onboarding_choice", "1")
+                self._send(chat_id, self._onboarding_text())
+            elif self._load_session() is not None:
+                self._send(
+                    chat_id,
+                    "Мы на середине вопросов. Продолжить — просто ответь на последний "
+                    "вопрос, или /stop, чтобы остановить сессию.",
+                )
+            else:
+                self._send(chat_id, self._start_text())
         elif command == "pause":
             self.storage.kv_set("paused", "1")
             self._send(
@@ -768,6 +915,9 @@ class Scheduler:
             "• /goals — цели и прогресс\n"
             "• /status — что сейчас происходит\n"
             "• /help — все команды\n\n"
+            "Приватность: записи хранятся в твоём Obsidian на этом Mac. Если включены "
+            "«умные» уточнения (llm.enabled), текст ответов уходит на api.samp.team — "
+            "их можно отключить в config.json, тогда всё останется только у тебя.\n\n"
             "Если сейчас неудобно — /pause, вернуться — /resume."
             % name
         )
@@ -787,7 +937,10 @@ class Scheduler:
             "/дизайн — пересобрать дашборд (то же: «дашборд»)\n"
             "/stop — прервать сессию\n"
             "/help — эта справка\n\n"
-            "Свободный текст можно писать в любой момент: отвечу и сохраню в дневник."
+            "Свободный текст можно писать в любой момент: отвечу и сохраню в дневник.\n\n"
+            "Приватность: записи лежат локально в Obsidian. «Умные» уточнения "
+            "(llm.enabled) отправляют текст ответов на api.samp.team; выключи "
+            "llm.enabled в config.json — и данные останутся только у тебя."
         )
 
     # ======================================================= ДИАЛОГ: СЕССИЯ
@@ -855,11 +1008,17 @@ class Scheduler:
         return cleaned
 
     def _followup_is_skip(self, reply: str) -> bool:
-        """LLM ответил «OK/ОК» — уточнение не нужно (используем prompts, если есть)."""
+        """LLM ответил «OK/ОК» — уточнение не нужно (используем prompts, если есть).
+
+        Если ``prompts.followup_is_skip`` вернул False (или упал), пробуем
+        запасной ``_is_ok``: модели иногда отвечают «Хорошо»/«Готово» вместо
+        строгого «OK» (REVIEW P2.7).
+        """
         helper = getattr(prompts, "followup_is_skip", None)
         if callable(helper):
             try:
-                return bool(helper(reply))
+                if bool(helper(reply)):
+                    return True
             except Exception:  # noqa: BLE001
                 pass
         return _is_ok(reply)
@@ -965,29 +1124,32 @@ class Scheduler:
             self.log.exception("Vault.write_entry упал — запись останется в БД")
             return False
 
-    def _write_mirror_safe(self) -> None:
+    def _write_mirror_safe(self) -> bool:
         """Обновляет machine-readable зеркало Obsidian (entries.jsonl/goals.json).
 
         Vault.write_mirror() ждёт полный список записей; контракт Storage не
         меняем — берём все записи через entries() с широким диапазоном дат.
         Любые ошибки только логируются: зеркало вторично по отношению к БД/дневнику.
+        Возвращает False при ошибке — ролловер тогда повторится (REVIEW P2.5).
         """
         if self.vault is None or not hasattr(self.vault, "write_mirror"):
-            return
+            return True
         obsidian_cfg = self.cfg.get("obsidian") or {}
         if obsidian_cfg.get("enabled") is False:
-            return
+            return True
         try:
             all_entries = self.storage.entries("0001-01-01", "9999-12-31")
         except Exception:  # noqa: BLE001
             self.log.exception("Не удалось прочитать записи для зеркала Obsidian")
-            return
+            return False
         try:
             self.vault.write_mirror(all_entries)
         except Exception:  # noqa: BLE001
             self.log.exception(
                 "Vault.write_mirror упал — данные в БД и дневнике не потеряны"
             )
+            return False
+        return True
 
     def _short_title(self, text: str, limit: int = 80) -> str:
         for line in _text(text).splitlines():

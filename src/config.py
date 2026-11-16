@@ -69,6 +69,10 @@ DEFAULTS: dict = {
         "name": "Life OS",
         "timezone": "Europe/Moscow",
         "lang": "ru",
+        # Онбординг и тихие часы — включаются в config/config.example.json;
+        # по умолчанию выключены, чтобы не мешать тестам и dev-запускам.
+        "onboarding": False,
+        "quiet_hours": [],
     },
 }
 

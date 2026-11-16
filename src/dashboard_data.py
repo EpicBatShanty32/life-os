@@ -29,6 +29,8 @@ import logging
 import math
 import os
 import re
+import tempfile
+import time
 from datetime import date, datetime, timedelta, timezone
 
 try:  # zoneinfo есть в Python 3.9+, но на всякий случай не падаем без него
@@ -64,6 +66,15 @@ _NEGATIVE_TRAINING = (
 _NEGATIVE_TASK = ("не сделал", "не выполнил", "не успел", "перенёс", "не доделал")
 _POSITIVE_TASK = ("сделал", "сделала", "выполнил", "выполнила", "готово",
                   "закрыл", "закончил", "done", "завершил")
+
+# Цели, у которых рост значения — это плохо (вес, похудение). Нужно для
+# direction-логики прогресса: current/target для них даёт ложные 100%.
+_DOWN_GOAL_RE = re.compile(r"вес|похуд|скинуть|сбросить", re.IGNORECASE)
+
+# Атомарная запись: уникальный temp-файл + несколько попыток os.replace.
+_WRITE_ATTEMPTS = 3
+_WRITE_RETRY_DELAY = 0.03
+_TMP_PREFIX = ".lifeos-dashboard-"
 
 _NUM_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
 _DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
@@ -120,10 +131,15 @@ def build_dashboard(cfg: dict, storage) -> str | None:
         _write_atomic(out_path, page)
 
         data_path = os.path.join(os.path.dirname(out_path), "data.json")
-        _write_atomic(
-            data_path,
-            json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False) + "\n",
-        )
+        try:
+            # Тот же безопасный дамп, что и для страницы: NaN/Infinity → null,
+            # а сбой сериализации не должен отменять уже собранную страницу.
+            _write_atomic(data_path, _json_dumps(data, compact=False) + "\n")
+        except Exception:
+            log.exception(
+                "dashboard: не удалось записать %s — страница уже собрана",
+                data_path,
+            )
 
         log.info("dashboard: собрано %s", out_path)
         return out_path
@@ -209,8 +225,9 @@ def _collect(cfg: dict, storage, now: datetime | None) -> dict:
     }
 
     # Последняя страховка: в JSON не должно быть NaN/Infinity.
-    _json_safe(data)
-    return data
+    # Результат обязательно присваиваем — иначе вычищенные значения
+    # остаются только в копии и попадают в data.json как NaN.
+    return _json_safe(data)
 
 
 def _empty_payload(cfg: dict, now: datetime | None) -> dict:
@@ -427,8 +444,35 @@ def _goals(cfg: dict, storage) -> list:
     return goals
 
 
+def _goal_direction(goal: dict) -> str:
+    """Направление цели: ``down`` (чем меньше, тем лучше) или ``up``.
+
+    Схему Storage не меняем: если хранилище отдало ``direction`` — уважаем
+    его (``up``/``down`` и русские синонимы). Иначе весовые цели определяем
+    по названию («вес», «похудеть», «скинуть», «сбросить») — для них рост
+    значения означает движение назад, а не 100%.
+    """
+    raw = goal.get("direction") if isinstance(goal, dict) else None
+    if isinstance(raw, str):
+        value = raw.strip().lower()
+        if value in ("down", "вниз", "снижение", "уменьшение", "меньше",
+                     "похудение", "сбросить"):
+            return "down"
+        if value in ("up", "вверх", "рост", "увеличение", "больше"):
+            return "up"
+    title = str(goal.get("title") or "") if isinstance(goal, dict) else ""
+    return "down" if _DOWN_GOAL_RE.search(title) else "up"
+
+
 def _goal_progress(goal: dict) -> float:
-    """Прогресс 0..1: current/target, статус done, или процент из текста."""
+    """Прогресс 0..1: current/target, статус done, или процент из текста.
+
+    Для убывающих целей (вес и т.п.) при ``current > target`` формула
+    ``current/target`` давала ложные 100%; считаем оставшийся путь
+    относительно текущего значения:
+    ``1 - (current - target) / max(current, 1)``. Если цель уже достигнута
+    (``current <= target``), работает обычная формула роста.
+    """
     status = str(goal.get("status") or "").strip().lower()
     if status in ("done", "completed", "complete", "выполнена", "выполнено",
                   "готово", "завершена", "закрыта"):
@@ -443,7 +487,10 @@ def _goal_progress(goal: dict) -> float:
     current = _num(goal.get("current"))
     progress = None
     if target is not None and target > 0 and current is not None:
-        progress = current / target
+        if current > target and _goal_direction(goal) == "down":
+            progress = 1.0 - (current - target) / max(current, 1.0)
+        else:
+            progress = current / target
     if progress is None:
         # Иногда прогресс записан как «60%» в current/note.
         for field in ("current", "note", "target"):
@@ -521,13 +568,23 @@ def _feed(entries: list) -> list:
 
 
 def _heatmap(entries: list, today: date) -> dict:
-    """8 недель × 7 дней, столбцы — недели с понедельника."""
+    """8 недель × 7 дней, столбцы — недели с понедельника.
+
+    Хитмап по ТЗ §3.6 — «чек-инов», поэтому считаем только записи слот-сессий
+    (morning/midday/evening), а не любые записи (вода, мысли и т.п.). Схема
+    ``cells[{date,count}]`` не меняется.
+    """
     weeks = HEATMAP_WEEKS
     monday = today - timedelta(days=today.weekday())
     start = monday - timedelta(weeks=weeks - 1)
     counts: dict = {}
     for entry in entries:
-        counts[entry["date"]] = counts.get(entry["date"], 0) + 1
+        if not isinstance(entry, dict) or _slot_of(entry) not in WEEK_SLOTS:
+            continue
+        day = entry.get("date")
+        if not isinstance(day, str):
+            continue
+        counts[day] = counts.get(day, 0) + 1
     cells = []
     for index in range(weeks * 7):
         day_iso = (start + timedelta(days=index)).isoformat()
@@ -574,9 +631,9 @@ def _safe_call(call, default, what: str):
 
 def _render(template: str, data: dict, cfg: dict) -> str:
     """Подставить в шаблон JSON, дату генерации и название приложения."""
+    # _json_dumps экранирует все «<» как \u003c: ни «</script>», ни
+    # «<!--<script>» в тексте пользователя не могут закрыть/открыть тег.
     payload = _json_dumps(data, compact=True)
-    # «</script>» внутри данных не должен закрыть тег раньше времени.
-    payload = payload.replace("</", "<\\/")
 
     generated = data.get("generated_at") or ""
     generated_human = _human_datetime(generated)
@@ -613,30 +670,80 @@ def _render(template: str, data: dict, cfg: dict) -> str:
 
 
 def _json_dumps(value, compact: bool) -> str:
+    """JSON без NaN/Infinity и без литеральных «<»/«>» внутри строк.
+
+    Экранирование «<» в ``\\u003c`` обязательно: данные вставляются внутрь
+    ``<script>``, и текст вида ``<!--<script>`` ломает HTML-парсер (браузер
+    видит два тега вместо одного). ``\\u003c`` — валидный JSON/JS-escape,
+    поэтому ``json.loads`` и ``JSON.parse`` возвращают исходный текст.
+    """
     kwargs = {"ensure_ascii": False, "allow_nan": False}
     if not compact:
         kwargs["indent"] = 2
     try:
-        return json.dumps(value, **kwargs)
+        text = json.dumps(value, **kwargs)
     except (TypeError, ValueError):
         log.exception("dashboard: данные не сериализуются в JSON")
-        return json.dumps(_json_safe(value), ensure_ascii=False,
-                          allow_nan=False)
+        try:
+            # NaN/Infinity → null; нестандартные объекты — через str().
+            text = json.dumps(_json_safe(value), default=str, **kwargs)
+        except (TypeError, ValueError):
+            log.exception("dashboard: безопасный дамп тоже не удался")
+            return "{}"
+
+    # «<» и «>» вне строк в JSON не встречаются, поэтому замена безопасна.
+    text = text.replace("<", "\\u003c").replace(">", "\\u003e")
+    # U+2028/U+2029 — исторически переводы строк для JS-парсеров.
+    return text.replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+
+
+def _replace_with_retry(source: str, target: str) -> None:
+    """``os.replace`` с несколькими попытками (кратковременный сбой ФС)."""
+    last_error = None
+    for attempt in range(1, _WRITE_ATTEMPTS + 1):
+        try:
+            os.replace(source, target)
+            return
+        except OSError as exc:
+            last_error = exc
+            if attempt < _WRITE_ATTEMPTS:
+                log.warning(
+                    "dashboard: не удалось заменить %s (попытка %d/%d): %s",
+                    target, attempt, _WRITE_ATTEMPTS, exc,
+                )
+                time.sleep(_WRITE_RETRY_DELAY * attempt)
+    if last_error is not None:
+        raise last_error
 
 
 def _write_atomic(path: str, text: str) -> None:
-    """Запись через временный файл + rename (не оставляем половинок)."""
+    """Запись через уникальный временный файл + ``os.replace``.
+
+    Уникальный temp (``mkstemp``) обязателен: при параллельных сборках общий
+    ``index.html.tmp`` приводил к тому, что 3 из 4 потоков теряли результат.
+    """
     folder = os.path.dirname(path) or "."
     os.makedirs(folder, exist_ok=True)
-    tmp_path = path + ".tmp"
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=_TMP_PREFIX, suffix=".tmp", dir=folder
+    )
     try:
-        with open(tmp_path, "w", encoding="utf-8", newline="\n") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             fh.write(text)
-        os.replace(tmp_path, path)
+            fh.flush()
+            os.fsync(fh.fileno())
+        # mkstemp создаёт 0600; для локальной страницы это нормально,
+        # но права существующего файла сохраняем.
+        try:
+            if os.path.exists(path):
+                os.chmod(tmp_name, os.stat(path).st_mode & 0o7777)
+        except OSError:  # pragma: no cover - права не критичны
+            pass
+        _replace_with_retry(tmp_name, path)
     finally:
-        if os.path.exists(tmp_path):
+        if os.path.exists(tmp_name):
             try:
-                os.remove(tmp_path)
+                os.remove(tmp_name)
             except OSError:
                 pass
 
@@ -852,7 +959,7 @@ def _metrics(entry: dict) -> dict:
 
 def _slot_of(entry: dict) -> str:
     slot = entry.get("slot") if isinstance(entry, dict) else None
-    return slot.strip() if isinstance(slot, str) else ""
+    return slot.strip().lower() if isinstance(slot, str) else ""
 
 
 def _text_of(entry: dict) -> str:

@@ -223,3 +223,20 @@ class StorageTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class StorageCyrillicPathTestCase(unittest.TestCase):
+    def test_db_path_with_cyrillic_and_spaces(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="lifeos-db-cyr-") as tmp:
+            db_path = Path(tmp) / "жизнь тест" / "база данных.sqlite"
+            storage = storage_mod.Storage(str(db_path))
+            try:
+                storage.kv_set("ключ", "значение")
+                self.assertEqual(storage.kv_get("ключ"), "значение")
+                storage.add_entry({"date": "2026-11-16",
+                                   "ts": "2026-11-16T12:00:00+03:00",
+                                   "text": "кириллица"})
+                self.assertEqual(len(storage.entries("2026-11-16", "2026-11-16")), 1)
+                self.assertTrue(db_path.is_file())
+            finally:
+                storage.close()

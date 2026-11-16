@@ -250,14 +250,15 @@ class SessionFlowTestCase(SchedulerTestBase):
         self.assertEqual(len(self.tg.texts()), 1, "повтор после 429 должен пройти")
         self.assertIsNotNone(self.storage.kv_get("session"))
 
-    def test_overdue_session_cleared_next_day(self) -> None:
+    def test_overdue_session_cleared_and_new_slot_starts(self) -> None:
         self.start_morning()
+        # Новый порядок тика: сначала закрываем вчерашнюю просроченную сессию,
+        # затем сразу стартует слот этого дня (опоздание 30 мин < catchup 180).
         self.scheduler.tick(_support.at(2026, 11, 17, 9, 0))
-        self.assertIsNone(self.storage.kv_get("session"))
-        # на следующем тике может начаться новый слот этого дня
-        self.scheduler.tick(_support.at(2026, 11, 17, 9, 1))
         session = json.loads(self.storage.kv_get("session"))
+        self.assertIsNotNone(session)
         self.assertEqual(session["date"], "2026-11-17")
+        self.assertEqual(session["slot"], "morning")
 
     def test_session_reminder_after_idle(self) -> None:
         self.start_morning()
@@ -271,7 +272,10 @@ class SessionFlowTestCase(SchedulerTestBase):
     def test_session_ttl_clears_stale(self) -> None:
         self.start_morning()
         self.scheduler.tick(_support.at(2026, 11, 16, 21, 30))  # 13 часов простоя
-        self.assertIsNone(self.storage.kv_get("session"))
+        # утренняя сессия снята по TTL; на её месте сразу вечерняя этого дня
+        session = json.loads(self.storage.kv_get("session"))
+        self.assertIsNotNone(session)
+        self.assertEqual(session["slot"], "evening")
 
 
 class CommandsTestCase(SchedulerTestBase):

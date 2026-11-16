@@ -11,7 +11,8 @@
     `## Главное`, `## Сделал`, `## Смотрел и читал`, `## Мысли`).
   - `Проекты/`, `Заметки/`, `08 Дневник/`, `00 Старт/`.
   - Бэкап базы: `/Users/user/Documents/чисто лайфик обсидиан/Бэкап базы 2026-11-15 перед настройкой`
-- Python: `/usr/bin/python3` = 3.13, внешних пакетов нет (только stdlib).
+- Python: `/usr/bin/python3` = 3.9.6 (боевой launchd), `python3` из PATH = 3.13.14;
+  код совместим с 3.9+, внешних пакетов нет (только stdlib).
 - DSH-окружение: работаем через bash; macOS 27.2.1; таймзона Europe/Moscow.
 - LLM для агента: SAMP gateway `https://api.samp.team/v1` (OpenAI-compatible),
   ключ `DDD_API_KEY` лежит в `~/.dsh/.credentials.yaml` (строка `refs: { DDD_API_KEY: sk-... }`),

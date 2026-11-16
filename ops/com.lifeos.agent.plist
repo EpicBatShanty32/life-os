@@ -20,12 +20,20 @@
 	<string>__APP_DIR__</string>
 	<key>RunAtLoad</key>
 	<true/>
+	<!-- KeepAlive{SuccessfulExit:false}: перезапускать только после падения.
+	     Чистое завершение (например, не заполнен токен — код 0) не должно
+	     крутить цикл перезапусков и засорять лог. -->
 	<key>KeepAlive</key>
-	<true/>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>60</integer>
 	<key>StandardOutPath</key>
-	<string>__LOG_DIR__/agent.log</string>
+	<string>__LOG_DIR__/agent.out.log</string>
 	<key>StandardErrorPath</key>
-	<string>__LOG_DIR__/agent.log</string>
+	<string>__LOG_DIR__/agent.out.log</string>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PYTHONUNBUFFERED</key>

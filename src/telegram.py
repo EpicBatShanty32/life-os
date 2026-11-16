@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import urllib.error
@@ -41,29 +42,52 @@ class TelegramError(Exception):
         return self.message
 
 
+def _utf16_len(text: str) -> int:
+    """Длина строки в UTF-16 code units — именно её считает Telegram.
+
+    Python ``len`` считает code points, поэтому эмодзи и другие символы вне
+    BMP «весят» в Bot API в два раза больше. Без этого суррогатная пара на
+    границе лимита даёт 400 ``message is too long``.
+    """
+    try:
+        return len(text.encode("utf-16-le")) // 2
+    except Exception:  # pragma: no cover — не бывает для валидного str
+        return len(text)
+
+
 def split_message(text: str, limit: int = MAX_MESSAGE_LEN) -> list[str]:
-    """Режет текст на части длиной не больше ``limit`` по границам строк.
+    """Режет текст на части не больше ``limit`` UTF-16 units по границам строк.
 
     Длинная строка без переводов строк режется жёстко. Пустые куски не
     возвращаются; текст короче лимита возвращается одним элементом.
     """
     if not text:
         return []
-    if len(text) <= limit:
+    if _utf16_len(text) <= limit:
         return [text]
 
     parts: list[str] = []
     current = ""
     for line in text.split("\n"):
-        # Строка сама длиннее лимита — режем её жёстко.
-        while len(line) > limit:
+        # Строка сама длиннее лимита — режем её жёстко, не разрывая суррогаты.
+        while _utf16_len(line) > limit:
             if current:
                 parts.append(current)
                 current = ""
-            parts.append(line[:limit])
-            line = line[limit:]
+            cut = 0
+            used = 0
+            for ch in line:
+                width = _utf16_len(ch)
+                if used + width > limit:
+                    break
+                used += width
+                cut += 1
+            if cut <= 0:  # pragma: no cover — защита от limit <= 0
+                cut = 1
+            parts.append(line[:cut])
+            line = line[cut:]
         candidate = line if not current else current + "\n" + line
-        if len(candidate) > limit and current:
+        if _utf16_len(candidate) > limit and current:
             parts.append(current)
             current = line
         else:
@@ -95,7 +119,19 @@ class Telegram:
 
     # ------------------------------------------------------------------ API
     def _url(self, method: str) -> str:
-        return "%s/bot%s/%s" % (self.api_base, self._token, method)
+        """Собирает URL метода, проверяя схему ``api_base``.
+
+        Проверка нужна до подстановки токена: иначе ошибка ``urllib`` придёт
+        с полным URL (а в нём — токен) и попадёт в лог. Текст ошибки ниже
+        намеренно не содержит ни URL, ни токена.
+        """
+        base = str(self.api_base or "")
+        if not base.lower().startswith(("http://", "https://")):
+            raise TelegramError(
+                "Некорректный telegram.api_base: нужен адрес вида "
+                "https://api.telegram.org (со схемой http/https, без пробелов)."
+            )
+        return "%s/bot%s/%s" % (base, self._token, method)
 
     def call(self, method: str, payload: dict | None = None,
              timeout: int = 60) -> dict:
@@ -107,19 +143,26 @@ class Telegram:
         """
         body = payload if payload is not None else {}
         data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(
-            self._url(method),
-            data=data,
-            method="POST",
-            headers={
-                "Content-Type": "application/json; charset=utf-8",
-                "Accept": "application/json",
-                "User-Agent": "LifeOS/1.0 (+python-urllib)",
-            },
-        )
         try:
+            # Request строится внутри try: ValueError/InvalidURL от кривого
+            # api_base не должны улететь наружу с URL, в котором есть токен.
+            request = urllib.request.Request(
+                self._url(method),
+                data=data,
+                method="POST",
+                headers={
+                    "Content-Type": "application/json; charset=utf-8",
+                    "Accept": "application/json",
+                    "User-Agent": "LifeOS/1.0 (+python-urllib)",
+                },
+            )
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 raw = response.read()
+        except (ValueError, http.client.InvalidURL):
+            raise TelegramError(
+                "Некорректный telegram.api_base: проверьте схему и хост "
+                "(ожидается https://api.telegram.org). HTTP-запрос не построен."
+            ) from None
         except urllib.error.HTTPError as exc:
             # Тело ошибки Telegram — JSON {"ok": false, "description": ...}.
             raw = b""

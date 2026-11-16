@@ -26,7 +26,7 @@ flowchart LR
 
 | Файл | Строк | Владелец | Контракт | Роль |
 |---|--:|---|---|---|
-| `src/__init__.py` | 11 | Lead | — | пакет, `__version__ = "1.0.0"` (:11) |
+| `src/__init__.py` | 11 | Lead | — | пакет, `__version__ = "1.0.0"` (:11) — **расхождение** с `VERSION` = 0.1.0 (D-13) |
 | `src/config.py` | 286 | bot-core | §1 | поиск/слияние/валидация конфига, `resolve_path`, `project_root` |
 | `src/telegram.py` | 235 | bot-core | §2 | Bot API на urllib: `call/send/get_updates`, split 4000, `TelegramError` |
 | `src/storage.py` | 397 | bot-core | §3 | SQLite: messages, entries, goals, habits, kv; WAL, `busy_timeout` |
@@ -38,7 +38,7 @@ flowchart LR
 | `src/dashboard_data.py` | 927 | dash | §9 | `collect_data` + `build_dashboard`, вставка JSON в шаблон |
 | `src/main.py` | 466 | bot-core | §10 | CLI, цикл, pid-лок, логи, SIGTERM |
 | `src/mock_telegram.py` | 495 | qa | §11 | мок Bot API для тестов и e2e |
-| `dashboard/template.html` | 701 | Lead | — | дизайн, CSS-токены, SVG-графики, `window.LIFEOS_DATA` (:275) |
+| `dashboard/template.html` | 1 600+ | Lead, затем правка | — | дизайн, CSS-токены, SVG-графики, `window.LIFEOS_DATA` (:600); переписан с 16:44 |
 | `install.sh` / `uninstall.sh` | 739 / 229 | ops | — | установка, launchd, права, подхват ключа |
 | `ops/com.lifeos.agent.plist` | 37 | ops | — | LaunchAgent: RunAtLoad, KeepAlive, WorkingDirectory |
 
@@ -81,7 +81,7 @@ sequenceDiagram
         S->>V: write_entry / write_mirror
         S-->>T: человеческий ответ + сохранение
     end
-    M->>S: tick(now) каждые ~15 c
+    M->>S: tick(now) после каждого getUpdates — простой ≈ 20 c, при трафике ≈ 1 c
 ```
 
 ## 4. Поток слота (утро/день/вечер)
@@ -119,7 +119,7 @@ flowchart TD
 | Цели | `<vault>/Проекты/Life OS/Цели.md` | таблица между `<!-- lifeos:goals:start -->` / `end` | наследует vault |
 | Зеркало | `<vault>/Life OS/data/entries.jsonl`, `goals.json` | все записи и цели в машинном виде (для Dataview/скриптов) | наследует vault |
 | Дашборд | `dashboard/index.html` + `data.json` | HTML с встроенным `window.LIFEOS_DATA` и копия данных | 644 |
-| Логи | `data/logs/agent.log` (handler, 5 МБ × 3) + `~/Library/Logs/LifeOS/agent.log` (stdout launchd) | события, ошибки; без токенов и текстов LLM | 600/644 |
+| Логи | `data/logs/agent.log` (handler `lifeos`, 5 МБ × 3) + `~/Library/Logs/LifeOS/agent.log` (stdout launchd) | события `lifeos`; логи `src.*` (llm/parsing/dashboard) в файл не попадают — дефект P1-4 | 600/644 |
 | PID | `data/lifeos.pid` | pid живого процесса | 600 |
 
 Схема SQLite — `ТЗ.md` §5. Время — ISO с оффсетом `+03:00`; сравнение — по локальной дате.
@@ -156,13 +156,35 @@ flowchart TD
 | Отказ | Проявление | Что делает система | Где |
 |---|---|---|---|
 | Telegram 401 | неверный токен | `TelegramError(401)`, сообщение в лог, бот не падает | `telegram.py` |
-| Telegram 409 | два процесса | понятная ошибка + pid-лок не даёт второму стартовать | `main.py:66` |
+| Telegram 409 | два процесса | понятная ошибка + pid-лок не даёт второму стартовать | `main.py:65-97` |
 | Telegram 429 | флуд | `retry_after`, один повтор в `scheduler._send` | `scheduler.py` |
 | LLM 403/429/5xx | нет уточнений | `None` → скриптованные вопросы, данные пишутся | `llm.py`, `parsing.py` |
 | Vault недоступен (TCC) | «Operation not permitted» | `write_entry` → False, `written=0`, повтор при следующем синке | `obsidian.py` |
 | Нет шаблона дашборда | нет HTML | `build_dashboard` → `None`, лог; демо не страдает | `dashboard_data.py` |
 | Битая строка `metrics` | мусор в JSON | нормализация в `None`/0, без NaN | `dashboard_data.py` |
 | Диск/права на лог | нет файла лога | fallback в stderr, процесс живёт | `main.py:130` |
+
+### 8.1 Известные дефекты (из `REVIEW.md`, снимок 16:50)
+
+| ID | Дефект | Где | Эффект |
+|---|---|---|---|
+| P1-1 | offset `getUpdates` живёт только в памяти | `main.py:399,440` | после рестарта пачка переотдаётся: дубли, сдвиг сессии |
+| P1-2 | `--dry-run` подменяет только Telegram | `main.py:315-333,443-446` | пишет в рабочую БД/kv и vault, «съедает» слот дня |
+| P1-3 | `Request` строится до `try` | `telegram.py:110-119` | URL с токеном уходит в лог |
+| P1-4 | логи `src.*` мимо файлового handler | `main.py:109-118`, `llm.py:25`, `parsing.py:31` | файл лога не содержит ошибок LLM/parsing/dashboard |
+| P2-10 | `_json_safe` вызывается без присваивания | `dashboard_data.py:212` | NaN может уронить сборку в `None` |
+| P2-12 | `touch_habit` никто не вызывает | `storage.py:367` | карточка привычек всегда пустая |
+| SEC P1-2 | KeepAlive + фатальная ошибка конфига | `ops/*.plist:22-24`, `main.py:273` | рестарт каждые ~10 с, ~26 тыс. строк лога в сутки |
+| ADV D-02 | pid-лок TOCTOU | `main.py:73-94` | 7 из 12 процессов стартуют; дубли сессий 27/30 |
+| ADV D-03 | LLM 2×timeout без circuit breaker | `scheduler.py:894-906` | до ~120 с на сообщение при timeout=60 |
+| ADV D-04 | нет лимитов ответа/истории LLM | `scheduler.py:245-272` | 250k → 63 сообщения, 249 КБ в daily |
+| ADV D-05 | UTF-16: символы вместо code units | `telegram.py:21,44-73` | 400 от Bot API, ответ не доставлен |
+| ADV D-06 | `<` не экранируется в JSON | `dashboard_data.py:577-580` | страница теряет прикладной JS |
+| ADV D-07 | служебные маркеры в тексте пользователя | `obsidian.py` | запись скрыта из vault, но `written=1` |
+
+Карта актуальна по структуре; перечисленные дефекты — в коде, не в схеме. На 16:57–16:58
+часть P1 уже правится (`telegram.py`, plist, README); до зелёного прогона таблицу считать
+снимком 16:50 (`TEST_HISTORY.md` §1.1).
 
 ## 9. Границы модулей
 
@@ -172,5 +194,5 @@ flowchart TD
 - `obsidian` не знает про Telegram и LLM.
 - `dashboard_data` только читает `Storage`.
 - `main` — композиционный корень: собирает объекты и крутит цикл; бизнес-логики не содержит.
-- Циклов импортов нет: `config → (все)`, `prompts → parsing`, `parsing → llm/prompts`,
-  `scheduler → parsing/prompts`, `main → все`.
+- Циклов импортов нет: `config → (все)`, `parsing → prompts/llm`, `scheduler → parsing/prompts`,
+  `main → все`; `prompts` не зависит ни от чего, кроме stdlib.

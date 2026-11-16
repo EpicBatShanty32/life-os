@@ -62,8 +62,9 @@ class Telegram:
     def __init__(self, token: str, api_base: str = "https://api.telegram.org"): ...
     def call(self, method: str, payload: dict | None = None,
              timeout: int = 60) -> dict:
-        """POST form-encoded JSON. Возвращает result. 429 → TelegramError
-        c retry_after; 401/403 → TelegramError status; сеть → TelegramError."""
+        """POST JSON-телом (Bot API это принимает). Возвращает result. 429 → TelegramError
+        c retry_after; 401/403 → TelegramError status; сеть → TelegramError.
+        Лимит длины текста — 4000 UTF-16 units (не code points!)."""
     def send(self, chat_id: int, text: str) -> None
         # режет текст >4000 символов на части по 4000 (по границам строк)
     def get_updates(self, offset: int | None,
@@ -164,8 +165,10 @@ def parse_answer(llm: LLM, slot: str, question: str, answer: str,
     {"date":"YYYY-MM-DD","ts":now_iso,"slot":slot,"category":...,
      "title":"коротко (≤80)","text":"человекочитаемая запись",
      "raw":answer,"metrics":{...}}
-    LLM недоступен/ошибка → эвристика (категория по слоту/ключевым словам,
-    title из первой строки, metrics {}). Не бросает."""
+    LLM недоступен/ошибка → эвристика: категория по тексту вопроса/ключевым словам,
+    title из первой строки, metrics — числа с единицами, вытащенные regex-эвристикой
+    («2 000 мл» → 2000; «встреча 30 минут» не тренировка; «час за компом» не сон).
+    Не бросает."""
 
 def heuristic_metrics(text: str) -> dict:
     """достаёт числа: 2000 мл, 8 часов, 80 кг, 3 км, 45 мин → известные ключи"""

@@ -67,7 +67,8 @@ class ParseAnswerFallbackTestCase(unittest.TestCase):
         self.assertEqual(entry["date"], "2026-11-16")
         self.assertEqual(entry["ts"], NOW_ISO)
         self.assertEqual(entry["slot"], "midday")
-        self.assertEqual(entry["metrics"], {}, "по контракту fallback: metrics пустые")
+        self.assertEqual(entry["metrics"], {"water_ml": 500},
+                         "fallback выжимает числа эвристикой, чтобы дашборд жил без LLM")
         self.assertLessEqual(len(entry["title"]), 80)
         self.assertEqual(entry["raw"], "Съел рис с курицей и выпил 500 мл воды")
 

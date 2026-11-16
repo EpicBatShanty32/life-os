@@ -141,17 +141,50 @@ _CATEGORY_PATTERNS = (
 #: сон → вода → настроение → задачи → цели).
 _CATEGORY_ORDER = tuple(category for category, _ in _CATEGORY_PATTERNS)
 
+#: Подсказки категорий по тексту вопроса: ответ на «что ел» — про еду, даже если
+#: в нём меньше ключевых слов, чем в случайной реплике.
+_QUESTION_HINTS = (
+    (re.compile(r"\bел\w*|\bеда\b|завтрак|обед|ужин|перекус|порци\w*|калори\w*",
+                re.IGNORECASE | re.UNICODE), ("food", "water")),
+    (re.compile(r"вод\w*|\bпить\w*|\bмл\b|литр\w*", re.IGNORECASE | re.UNICODE),
+     ("water", "food")),
+    (re.compile(r"трениров\w*|зал\b|спорт\w*|упражн\w*|\bбег\w*|силов\w*",
+                re.IGNORECASE | re.UNICODE), ("training",)),
+    (re.compile(r"\bсон\w*|спал\w*|выспал\w*|встал\w*|проснул\w*",
+                re.IGNORECASE | re.UNICODE), ("sleep",)),
+    (re.compile(r"настроен\w*|энерги\w*|фокус\w*|самочувств\w*|тревог\w*",
+                re.IGNORECASE | re.UNICODE), ("mood",)),
+    (re.compile(r"задач\w*|план\w*|сделал\w*|успел\w*|перенёс\w*|перенес\w*",
+                re.IGNORECASE | re.UNICODE), ("tasks", "goals")),
+    (re.compile(r"цел\w*|прогресс\w*|рубеж\w*", re.IGNORECASE | re.UNICODE),
+     ("goals", "tasks")),
+)
 
-def _guess_category(slot: str, text: str) -> str:
-    """Категория по ключевым словам, иначе — по слоту. Никогда не бросает.
+
+def _question_categories(question: str) -> tuple:
+    """Категории, которых ждём от ответа на этот вопрос (может быть пусто)."""
+    try:
+        low = _normalize_spaces((question or "").lower().replace("ё", "е"))
+        for pattern, categories in _QUESTION_HINTS:
+            if pattern.search(low):
+                return categories
+    except Exception:  # pragma: no cover — regex не должен ронять разбор
+        return ()
+    return ()
+
+
+def _guess_category(slot: str, text: str, question: str = "") -> str:
+    """Категория по ключевым словам, иначе — по вопросу/слоту. Не бросает.
 
     Считаем число попаданий по категориям: фраза «три задачи: код, отчёт, зал»
     остаётся задачами, а не тренировкой, хотя «зал» и встретилось. При ничьей
-    предпочитаем категорию слота, иначе — общий порядок приоритета.
+    предпочитаем категорию, ожидаемую по вопросу, затем слот, затем общий
+    порядок приоритета (UX_REVIEW P1-2).
     """
     slot_key = str(slot or "").strip().lower()
     slot_category = _SLOT_CATEGORIES.get(slot_key, "other")
-    low = (text or "").lower().replace("ё", "е")
+    expected = _question_categories(question)
+    low = _normalize_spaces((text or "").lower().replace("ё", "е"))
     if low.strip():
         scores = {}
         for category, pattern in _CATEGORY_PATTERNS:
@@ -163,11 +196,19 @@ def _guess_category(slot: str, text: str) -> str:
                 scores[category] = count
         if scores:
             best = max(scores.values())
+            # Слабый сигнал (одно слово) и есть ожидание по вопросу — верим вопросу.
+            if expected and best <= 1:
+                return expected[0]
             tied = [category for category in _CATEGORY_ORDER
                     if scores.get(category) == best]
+            for category in expected:
+                if category in tied:
+                    return category
             if slot_category in tied:
                 return slot_category
             return tied[0]
+    if expected:
+        return expected[0]
     return slot_category
 
 
@@ -282,15 +323,28 @@ def _normalize_category(value) -> "str | None":
 # Метрики: числа и списки
 # ---------------------------------------------------------------------------
 
+#: Разделитель тысяч в разных видах: «2 000», «2 000», «2 000» (NBSP/thin space).
+_SPACE_GROUP_RE = re.compile(r"(?<=\d)[\u00a0\u202f ](?=\d{3}(?:\D|$))")
+
+
+def _normalize_spaces(text: str) -> str:
+    """Убирает разделители тысяч: «2 000 мл» → «2000 мл», «1 234,5» → «1234,5»."""
+    try:
+        cleaned = text.replace("\u00a0", " ").replace("\u202f", " ")
+        return _SPACE_GROUP_RE.sub("", cleaned)
+    except Exception:
+        return text
+
+
 def _to_number(value) -> "float | None":
-    """Число из int/float/строки («7,5», «7.5 ч», «80»). None, если числа нет."""
+    """Число из int/float/строки («7,5», «7.5 ч», «2 000», «80»). None, если числа нет."""
     try:
         if isinstance(value, bool):
             return None
         if isinstance(value, (int, float)):
             number = float(value)
         elif isinstance(value, str):
-            cleaned = value.strip().replace(",", ".").replace(" ", "")
+            cleaned = _normalize_spaces(value.strip()).replace(",", ".").replace(" ", "")
             match = re.search(r"-?\d+(?:\.\d+)?", cleaned)
             if not match:
                 return None
@@ -394,7 +448,7 @@ def _sanitize_metrics(raw) -> dict:
 # Эвристические метрики по тексту (без LLM)
 # ---------------------------------------------------------------------------
 
-_NUM = r"(\d+(?:[.,]\d+)?)"
+_NUM = r"(-?\d+(?:[.,]\d+)?)"
 
 _RE_ML = re.compile(_NUM + r"\s*(?:мл|ml|миллилитр\w*)(?!\w)", re.IGNORECASE)
 _RE_LITER = re.compile(_NUM + r"\s*(?:литр\w*|liter\w*|л)(?!\w)", re.IGNORECASE)
@@ -415,6 +469,10 @@ _RE_SLEEP_WORDS = re.compile(
 _RE_TRAINING_WORDS = re.compile(
     r"трениров|зал|жим|присед|бег|бегал|пробеж|кардио|йог|растяж|плава|"
     r"турник|подтягива|штанг|гантел|кроссфит|спорт|велосипед|лыж|отжима",
+    re.IGNORECASE)
+#: «Встреча 30 минут», «созвон 45 мин» — не про тренировку (UX_REVIEW P1).
+_RE_NOT_TRAINING = re.compile(
+    r"встреч\w*|созвон\w*|совещан\w*|переговор\w*|звонок\b|звонк[ауе]\b|лекци\w*",
     re.IGNORECASE)
 _RE_BAR_WEIGHT = re.compile(
     r"присед|жим|штан|гантел|тяг[аи]|становая|снаряд|блин",
@@ -456,6 +514,8 @@ def _hours_to_metric(low: str, start: int, end: int, value: float):
     """Часы → sleep_h или duration_min: смотрим, какое слово ближе к числу.
 
     «Спал 8 часов, тренировка 1 час» — 8 часов про сон, 1 час про тренировку.
+    Если рядом ни слова про сон, ни про тренировку («час за компом») — None:
+    число не метрика сна и не тренировка (UX_REVIEW P1).
     """
     window_start = max(0, start - 40)
     window_end = min(len(low), end + 40)
@@ -466,6 +526,8 @@ def _hours_to_metric(low: str, start: int, end: int, value: float):
     if training_distance is not None and (sleep_distance is None
                                           or training_distance < sleep_distance):
         return "duration_min", int(round(value * 60))
+    if sleep_distance is None:
+        return None
     return "sleep_h", _round1(value)
 
 
@@ -498,7 +560,7 @@ def heuristic_metrics(text: str) -> dict:
             text = str(text)
         if not text.strip():
             return {}
-        low = text[:20000].lower().replace("ё", "е")
+        low = _normalize_spaces(text[:20000].lower().replace("ё", "е"))
         metrics = {}
 
         # --- вода: суммы мл и литров -------------------------------------
@@ -524,16 +586,24 @@ def heuristic_metrics(text: str) -> dict:
             number = _to_number(match.group(1))
             if number is None or number <= 0:
                 continue
-            key, value = _hours_to_metric(low, match.start(), match.end(), number)
+            key, value = _hours_to_metric(low, match.start(), match.end(), number) or (None, None)
+            if key is None:
+                continue
             if key == "sleep_h" and sleep_h is None:
                 sleep_h = value
             elif key == "duration_min" and duration_from_hours is None:
                 duration_from_hours = int(value)
         minutes = []
-        for raw in _RE_MINUTES.findall(low):
-            number = _to_number(raw)
-            if number is not None and number > 0:
-                minutes.append(number)
+        for match in _RE_MINUTES.finditer(low):
+            number = _to_number(match.group(1))
+            if number is None or number <= 0:
+                continue
+            window = low[max(0, match.start() - 40): match.end() + 40]
+            # «встреча 30 минут», «созвон 45 мин» — это не тренировка
+            if (_RE_NOT_TRAINING.search(window)
+                    and not _RE_TRAINING_WORDS.search(window)):
+                continue
+            minutes.append(number)
         duration_min = int(round(minutes[0])) if minutes else duration_from_hours
         if sleep_h is not None:
             metrics["sleep_h"] = sleep_h
@@ -598,24 +668,27 @@ def _build_entry(slot: str, category: str, title: str, text: str,
 
 
 def _entry_from_llm(parsed: dict, slot: str, answer: str,
-                    date: str, ts: str) -> dict:
+                    date: str, ts: str, question: str = "") -> dict:
     """Нормализация JSON от LLM в entry."""
     category = _normalize_category(parsed.get("category"))
     if category is None:
-        category = _guess_category(slot, answer)
+        category = _guess_category(slot, answer, question)
     title = _make_title(parsed.get("title"), answer, category)
     text = _make_text(parsed.get("text"), answer)
     metrics = _sanitize_metrics(parsed.get("metrics"))
     return _build_entry(slot, category, title, text, answer, metrics, date, ts)
 
 
-def _entry_fallback(slot: str, answer: str, date: str, ts: str) -> dict:
-    """Запись без LLM: категория по словам/слоту, title из первой строки, metrics {}."""
-    category = _guess_category(slot, answer)
+def _entry_fallback(slot: str, answer: str, date: str, ts: str,
+                    question: str = "") -> dict:
+    """Запись без LLM: категория по вопросу/словам, title из первой строки,
+    metrics — то, что удалось вытащить эвристикой (иначе дашборд пустой)."""
+    category = _guess_category(slot, answer, question)
     title = _make_title(None, answer, category)
     # «text = ответ как есть»: не переформатируем, только убираем пустой ответ
     text = answer if isinstance(answer, str) and answer.strip() else ""
-    return _build_entry(slot, category, title, text, answer, {}, date, ts)
+    metrics = heuristic_metrics(answer)
+    return _build_entry(slot, category, title, text, answer, metrics, date, ts)
 
 
 def _minimal_entry(slot, answer, now_iso) -> dict:
@@ -680,13 +753,14 @@ def parse_answer(llm, slot: str, question: str, answer: str,
                 parsed = None
             if isinstance(parsed, dict):
                 try:
-                    return _entry_from_llm(parsed, slot_key, raw_answer, date, ts)
+                    return _entry_from_llm(parsed, slot_key, raw_answer, date, ts,
+                                           question_text)
                 except Exception as exc:
                     logger.warning("parse_answer: не удалось нормализовать JSON LLM (%s)",
                                    type(exc).__name__)
 
         # 2) fallback без LLM — всегда работает
-        return _entry_fallback(slot_key, raw_answer, date, ts)
+        return _entry_fallback(slot_key, raw_answer, date, ts, question_text)
     except Exception as exc:  # последняя линия обороны контракта
         logger.warning("parse_answer: непредвиденная ошибка (%s)", type(exc).__name__)
         return _minimal_entry(slot, answer, now_iso)

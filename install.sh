@@ -310,7 +310,7 @@ ensure_dirs() {
   say "LaunchAgent: $PLIST_DIR"
   run mkdir -p "$APP_DIR" "$CONFIG_DIR" "$PLIST_DIR" "$LOG_DIR" "$APP_DIR/data"
   if [ "$DRY_RUN" -eq 0 ]; then
-    chmod 700 "$APP_DIR" "$CONFIG_DIR" "$LOG_DIR" 2>/dev/null || true
+    chmod 700 "$APP_DIR" "$CONFIG_DIR" "$LOG_DIR" "$APP_DIR/data" 2>/dev/null || true
   fi
 }
 
@@ -325,7 +325,14 @@ copy_project() {
   if same_dir "$SCRIPT_DIR" "$APP_DIR"; then
     say "Запуск из папки приложения — копирование не требуется."
   else
-    run rm -rf "$APP_DIR/src"
+    # Защита от опечатки в LIFEOS_APP_DIR: не удаляем «/src» у чужого пути.
+    case "$APP_DIR" in
+      ""|"/"|"$HOME") die "Небезопасный LIFEOS_APP_DIR: '$APP_DIR' — отказ." ;;
+    esac
+    case "$APP_DIR" in
+      *LifeOS*) run rm -rf "$APP_DIR/src" ;;
+      *) warn "LIFEOS_APP_DIR не содержит «LifeOS» — старый src не удаляю, копирую поверх." ;;
+    esac
     run mkdir -p "$APP_DIR/src"
     run cp -R "$SCRIPT_DIR/src/." "$APP_DIR/src/"
     say "код → $APP_DIR/src"
@@ -334,6 +341,9 @@ copy_project() {
       run mkdir -p "$APP_DIR/dashboard"
       run cp -R "$SCRIPT_DIR/dashboard/." "$APP_DIR/dashboard/"
       say "дашборд → $APP_DIR/dashboard"
+      if [ "$DRY_RUN" -eq 0 ] && [ ! -s "$APP_DIR/dashboard/template.html" ]; then
+        warn "dashboard/template.html отсутствует или пуст — дашборд не будет собираться."
+      fi
     else
       warn "папки dashboard/ нет — пропускаю."
     fi
@@ -403,15 +413,16 @@ ensure_config() {
 }
 
 # Вставляет ключ в llm.api_key атомарно (json, а не sed: в конфиге кириллица).
+# Ключ передаётся через env, а не argv: argv виден в ps у других процессов.
 inject_llm_key() {
-  "$PYTHON" - "$CONFIG_JSON" "$1" <<'PY'
+  LIFEOS_LLM_KEY="${LIFEOS_LLM_KEY:-}" "$PYTHON" - "$CONFIG_JSON" <<'PY'
 import json
 import os
 import sys
 import tempfile
 
 path = sys.argv[1]
-key = (sys.argv[2] or "").strip().strip("\"'")
+key = (os.environ.get("LIFEOS_LLM_KEY") or "").strip().strip("\"'")
 if not key:
     raise SystemExit(0)
 
@@ -472,9 +483,62 @@ setup_llm_key() {
     return 0
   fi
 
-  inject_llm_key "$key_found" || die "Не удалось записать llm.api_key в $CONFIG_JSON"
+  LIFEOS_LLM_KEY="$key_found" inject_llm_key || die "Не удалось записать llm.api_key в $CONFIG_JSON"
   run chmod 600 "$CONFIG_JSON"
   say "llm.api_key подхвачен из $(basename "$CREDENTIALS") (в конфиге, права 600)."
+}
+
+# Прописывает абсолютный paths.logs, чтобы агент и launchd писали в один LOG_DIR
+# (README обещает ~/Library/Logs/LifeOS/agent.log — и он должен быть правдой).
+setup_paths() {
+  step "Пути"
+  if [ "$DRY_RUN" -eq 1 ]; then
+    say "пропишу абсолютный paths.logs = $LOG_DIR (если в конфиге относительный)"
+    return 0
+  fi
+
+  "$PYTHON" - "$CONFIG_JSON" "$LOG_DIR" <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+path, log_dir = sys.argv[1], sys.argv[2].rstrip("/")
+try:
+    with open(path, encoding="utf-8") as fh:
+        cfg = json.load(fh)
+except (OSError, ValueError) as exc:
+    print("config.json не читается: %s" % exc, file=sys.stderr)
+    raise SystemExit(1)
+
+paths = cfg.get("paths")
+if not isinstance(paths, dict):
+    paths = {}
+    cfg["paths"] = paths
+
+current = str(paths.get("logs") or "").strip()
+if os.path.isabs(current):
+    if os.path.normpath(current) != os.path.normpath(log_dir):
+        print("paths.logs уже задан (%s) — оставляю как есть" % current)
+    raise SystemExit(0)
+
+paths["logs"] = log_dir
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=".config-", suffix=".json")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(cfg, fh, ensure_ascii=False, indent=2)
+        fh.write("\n")
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+except BaseException:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
+print("paths.logs = %s" % log_dir)
+PY
+  run chmod 600 "$CONFIG_JSON"
 }
 
 rotate_log_if_needed() {
@@ -718,6 +782,9 @@ main() {
       "$PYTHON" -m json.tool "$CONFIG_JSON" >/dev/null 2>&1 ||
         die "config.json — невалидный JSON. Исправь файл: $CONFIG_JSON"
       chmod 600 "$CONFIG_JSON" 2>/dev/null || true
+      # --reload тоже подхватывает появившийся позже LLM-ключ и абсолютный лог.
+      setup_llm_key
+      setup_paths
     fi
   fi
 
@@ -727,6 +794,7 @@ main() {
     copy_project
     ensure_config
     setup_llm_key
+    setup_paths
   fi
 
   rotate_log_if_needed

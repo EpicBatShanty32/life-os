@@ -247,13 +247,13 @@ def followup_is_skip(reply: str) -> bool:
     """True, если модель ответила OK (уточнение не нужно).
 
     Не входит в обязательный контракт, но избавляет bot-core от ручного разбора.
+    Строго точное OK/ОК (с точкой/кавычками по краям), без префиксов: иначе
+    «Окей, а сколько воды выпил?» считалось бы «уточнение не нужно» и терялось.
     """
     if not isinstance(reply, str):
         return False
     clean = reply.strip().strip(".!\"'«» ").upper()
-    if clean == "OK":
-        return True
-    return clean.startswith("OK ") or clean.startswith("OK,") or clean.startswith("ОК")
+    return clean in ("OK", "ОК")
 
 
 # ---------------------------------------------------------------------------

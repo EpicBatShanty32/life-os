@@ -146,6 +146,20 @@ _MIRROR_GOALS_NAME = "goals.json"
 _TMP_PREFIX = ".lifeos-tmp-"
 _TMP_SUFFIX = ".tmp"
 
+#: Максимальная длина текста записи в дневной заметке и в JSONL-зеркале.
+#: В БД текст хранится целиком (его использует LLM); в Obsidian 250-килобайтные
+#: строки ломают таблицы/поиск и раздувают файл, поэтому режем до 4000 символов.
+ENTRY_TEXT_LIMIT = 4000
+
+#: Служебные HTML-комментарии, которые пользователь не должен уметь подделать.
+#: Экранируем «<»/«>» и двоеточия в имени маркера: строка «<!-- lifeos:entry:2 -->»
+#: в тексте записи больше не выглядит для _marker_regex как настоящий маркер.
+_MARKER_ESCAPES = (
+    ("<!--", "&lt;!--"),
+    ("-->", "--&gt;"),
+)
+_MARKER_NAME_RE = re.compile(r"(?i)lifeos:(entry|goals):")
+
 
 class ProgrammerError(TypeError):
     """Явное нарушение контракта вызова (неверный тип/формат аргументов).
@@ -276,7 +290,7 @@ def _number_from(value) -> Optional[float]:
 
 
 def _clean_cell(value, default: str = "—") -> str:
-    """Безопасная ячейка markdown-таблицы: без переводов строк и «|»."""
+    """Безопасная ячейка markdown-таблицы: без переводов строк, «|» и маркеров."""
     if value is None:
         return default
     if isinstance(value, bool):
@@ -284,6 +298,7 @@ def _clean_cell(value, default: str = "—") -> str:
     text = " ".join(str(value).split())
     if not text:
         return default
+    text = _sanitize_user_text(text)
     return text.replace("|", "\\|")
 
 
@@ -291,6 +306,31 @@ def _sanitize_marker_id(raw) -> str:
     """ID для HTML-маркера: только безопасные символы."""
     token = re.sub(r"[^0-9A-Za-z_.-]+", "-", str(raw)).strip("-.")
     return token or "0"
+
+
+def _sanitize_user_text(text: str) -> str:
+    """Экранирует служебные HTML-комментарии в пользовательском тексте.
+
+    Нужно, чтобы текст записи/цели не мог подделать маркер идемпотентности
+    (``<!-- lifeos:entry:N -->``) и подавить чужую запись, а также не создавал
+    незакрытые HTML-комментарии в заметке.
+    """
+    if not isinstance(text, str) or not text:
+        return text if isinstance(text, str) else ""
+    for token, replacement in _MARKER_ESCAPES:
+        text = text.replace(token, replacement)
+    return _MARKER_NAME_RE.sub(
+        lambda match: "lifeos&#58;%s&#58;" % match.group(1), text
+    )
+
+
+def _truncate_text(text: str, limit: int = ENTRY_TEXT_LIMIT) -> str:
+    """Обрезает длинный текст до ``limit`` символов, добавляя «…»."""
+    if not isinstance(text, str) or len(text) <= limit:
+        return text
+    if limit <= 1:
+        return "…"[:limit]
+    return text[: limit - 1].rstrip() + "…"
 
 
 # ---------------------------------------------------------------------------
@@ -330,7 +370,17 @@ class Vault:
         self.goals_path = self._str_setting(obsidian, "goals_path", DEFAULT_GOALS_PATH)
         self.data_folder = self._str_setting(obsidian, "data_folder", DEFAULT_DATA_FOLDER)
         self.write_mirror_enabled = _as_bool(obsidian.get("write_mirror"), True)
-        self.enabled = _as_bool(obsidian.get("enabled"), True) and self.vault_path is not None
+
+        # Корень vault — существующая папка. Не создаём его сами: опечатка в
+        # obsidian.vault_path иначе приведёт к «фантомной» базе, куда молча
+        # уедут все записи. Подпапки (01 Daily, Проекты/…) внутри готовой базы
+        # создавать можно.
+        self._vault_configured = _as_bool(obsidian.get("enabled"), True)
+        self._vault_issue_logged = False
+        vault_ready = self._check_vault_root(log_issue=self._vault_configured)
+        self.enabled = self._vault_configured and vault_ready
+        if self._vault_configured and not vault_ready and self.vault_path is not None:
+            self._vault_issue_logged = True
 
         app = cfg.get("app") or {}
         timezone_name = app.get("timezone") if isinstance(app, dict) else None
@@ -368,6 +418,66 @@ class Vault:
         if not path.is_absolute():
             path = self._root / path
         return Path(os.path.abspath(str(path)))
+
+    def _check_vault_root(self, log_issue: bool = False) -> bool:
+        """Есть ли корень vault и является ли он папкой (ничего не создаёт)."""
+        path = self.vault_path
+        if path is None:
+            return False
+        try:
+            if path.is_dir():
+                return True
+            exists = path.exists()
+        except OSError as exc:
+            if log_issue:
+                logger.error(
+                    "Не удалось проверить папку Obsidian %s: %s — запись отключена",
+                    path,
+                    exc,
+                )
+            return False
+        if log_issue:
+            if exists:
+                logger.error(
+                    "obsidian.vault_path %s существует, но это не папка — "
+                    "запись в Obsidian отключена (путь не будет создан)",
+                    path,
+                )
+            else:
+                logger.error(
+                    "obsidian.vault_path %s не найден — запись в Obsidian "
+                    "отключена, пока папка базы не появится. Создайте vault в "
+                    "Obsidian или исправьте obsidian.vault_path в конфиге; "
+                    "подпапки внутри существующей базы создаются автоматически.",
+                    path,
+                )
+        return False
+
+    def _require_vault(self, action: str) -> bool:
+        """Проверка перед записью: корень vault существует и включён в конфиге.
+
+        Если папка появилась после старта агента — запись включается сама,
+        без перезапуска (пользователь мог открыть Obsidian позже).
+        """
+        if not self._vault_configured:
+            logger.debug(
+                "Obsidian выключен (obsidian.enabled=false) — %s пропущено", action
+            )
+            return False
+        if self._check_vault_root(log_issue=False):
+            if not self.enabled:
+                logger.info(
+                    "Папка Obsidian найдена (%s) — запись включена", self.vault_path
+                )
+                self.enabled = True
+            return True
+        if not self._vault_issue_logged:
+            self._vault_issue_logged = True
+            self._check_vault_root(log_issue=True)
+        logger.debug(
+            "Папка Obsidian недоступна (%s) — %s пропущено", self.vault_path, action
+        )
+        return False
 
     @staticmethod
     def _str_setting(obsidian: dict, key: str, default: str) -> str:
@@ -498,12 +608,12 @@ class Vault:
         """
         date_str = self._validate_date(date)
         path = self._daily_path(date_str)
-        if not self.enabled:
-            logger.debug("Obsidian выключен — дневная заметка не создаётся")
+        if not self._require_vault("создание дневной заметки"):
             return path
         if path.exists():
             return path
         try:
+            # Подпапка внутри существующего vault — можно (корень уже проверен).
             path.parent.mkdir(parents=True, exist_ok=True)
             content = self._render_template(date_str)
             if content and not content.endswith("\n"):
@@ -563,7 +673,9 @@ class Vault:
             for key in ("date", "ts", "category", "title", "text", "raw")
         )
         digest = hashlib.sha1(seed.encode("utf-8", "replace")).hexdigest()[:12]
-        logger.warning("Запись без id — маркер будет noid-%s", digest)
+        # Это не ошибка: scheduler в проде всегда передаёт id. Держим в debug,
+        # чтобы не засорять лог на каждый вызов без id.
+        logger.debug("Запись без id — маркер будет noid-%s", digest)
         return "noid-%s" % digest
 
     @staticmethod
@@ -572,7 +684,7 @@ class Vault:
 
     @staticmethod
     def _bullet_text(entry: dict) -> str:
-        """Человекочитаемый текст пункта (одна строка)."""
+        """Человекочитаемый текст пункта (одна строка, без подделки маркера)."""
         text = entry.get("text")
         if not isinstance(text, str) or not text.strip():
             text = entry.get("title")
@@ -581,6 +693,10 @@ class Vault:
         elif not isinstance(text, str):
             text = str(text)
         normalized = " ".join(text.split())
+        # Экранируем «<!--»/«-->» и имя маркера, чтобы пользовательский текст
+        # не мог подавить чужую запись. Затем режем гигантские простыни.
+        normalized = _sanitize_user_text(normalized)
+        normalized = _truncate_text(normalized)
         return normalized or "(пустая запись)"
 
     def _format_bullet(self, entry: dict, marker_id: str) -> str:
@@ -625,12 +741,13 @@ class Vault:
                 break
 
         if section_index < 0:
-            # Раздела нет — создаём его в самом конце файла.
+            # Раздела нет — создаём его в самом конце файла. Пустая строка
+            # после заголовка — как в шаблоне дневной заметки.
             body = content
             if body.strip():
                 separator = "" if body.endswith("\n\n") else "\n"
-                return body + separator + heading_norm + "\n" + bullet + "\n"
-            return heading_norm + "\n" + bullet + "\n"
+                return body + separator + heading_norm + "\n\n" + bullet + "\n"
+            return heading_norm + "\n\n" + bullet + "\n"
 
         # Ищем начало следующего заголовка второго уровня.
         next_heading = len(lines) - 1  # последний элемент — "" от финального "\n"
@@ -645,7 +762,17 @@ class Vault:
         while insert_at > section_index + 1 and not lines[insert_at - 1].strip():
             insert_at -= 1
 
+        # Раздел был пуст (сразу следующий «## »): отделяем пункт от
+        # заголовка пустой строкой, чтобы Markdown не слипался.
+        if insert_at == section_index + 1:
+            lines.insert(insert_at, "")
+            insert_at += 1
+
         lines.insert(insert_at, bullet)
+
+        # И отделяем следующий заголовок от пункта, если пустой строки не было.
+        if insert_at + 1 < len(lines) and _H2_RE.match(lines[insert_at + 1]):
+            lines.insert(insert_at + 1, "")
         return "\n".join(lines)
 
     def write_entry(self, entry: dict) -> bool:
@@ -658,8 +785,7 @@ class Vault:
         if not isinstance(entry, dict):
             raise TypeError("write_entry: entry должен быть dict")
         try:
-            if not self.enabled:
-                logger.debug("Obsidian выключен — запись пропущена")
+            if not self._require_vault("запись в дневник"):
                 return False
 
             date_str = self._entry_date(entry)
@@ -737,6 +863,9 @@ class Vault:
         title = " ".join(str(raw).split()) if raw is not None else ""
         if not title:
             return "—"
+        # Маркеры goals/entry в названии цели — тоже пользовательский ввод:
+        # экранируем, чтобы не сломать служебный блок [[...]].
+        title = _sanitize_user_text(title)
         return "[[%s]]" % title.replace("|", "\\|")
 
     def _goal_progress(self, goal: dict) -> str:
@@ -843,8 +972,7 @@ class Vault:
         недоступен.
         """
         try:
-            if not self.enabled:
-                logger.debug("Obsidian выключен — цели не обновляются")
+            if not self._require_vault("обновление целей"):
                 return False
             goals = self._load_goals()
             if goals is None:
@@ -879,8 +1007,17 @@ class Vault:
     # ---------------------------------------------------------------- зеркало
     @staticmethod
     def _mirror_entry(entry: dict) -> dict:
-        """Запись для entries.jsonl: metrics всегда dict, JSON-сериализуемо."""
+        """Запись для entries.jsonl: metrics всегда dict, JSON-сериализуемо.
+
+        Длинные текстовые поля (text/title/raw) обрезаются до
+        :data:`ENTRY_TEXT_LIMIT`: в БД остаётся полный текст для LLM, а
+        зеркало/дневник не превращаются в 250-килобайтные строки.
+        """
         data = dict(entry)
+        for key in ("text", "title", "raw"):
+            value = data.get(key)
+            if isinstance(value, str):
+                data[key] = _truncate_text(value)
         metrics = data.get("metrics")
         if isinstance(metrics, str):
             try:
@@ -907,8 +1044,7 @@ class Vault:
         if not isinstance(entries, (list, tuple)):
             raise TypeError("write_mirror: entries должен быть list")
         try:
-            if not self.enabled:
-                logger.debug("Obsidian выключен — зеркало не пишется")
+            if not self._require_vault("запись зеркала"):
                 return
             if not self.write_mirror_enabled:
                 logger.debug("write_mirror=false — зеркало не пишется")
@@ -953,8 +1089,7 @@ class Vault:
         бросаются; неудачные записи остаются с ``written=0`` для повтора.
         """
         try:
-            if not self.enabled:
-                logger.debug("Obsidian выключен — синхронизация пропущена")
+            if not self._require_vault("синхронизация записей"):
                 return 0
             if self.storage is None:
                 logger.debug("storage не передан — синхронизация невозможна")

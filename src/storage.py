@@ -5,7 +5,9 @@
 агент в неё пишет.
 
 ``entries.metrics`` хранится JSON-строкой, наружу всегда отдаётся dict.
-Время — ISO с оффсетом Europe/Moscow (``2026-11-16T14:02:11+03:00``).
+Время — ISO с оффсетом таймзоны приложения (по умолчанию Europe/Moscow,
+``2026-11-16T14:02:11+03:00``); таймзону можно передать в конструктор —
+строкой IANA или готовым ``tzinfo``.
 """
 
 from __future__ import annotations
@@ -13,13 +15,14 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, tzinfo
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 __all__ = ["Storage"]
 
-_TZ = ZoneInfo("Europe/Moscow")
+_DEFAULT_TZ_NAME = "Europe/Moscow"
+_TZ = ZoneInfo(_DEFAULT_TZ_NAME)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS messages (
@@ -78,12 +81,33 @@ CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
 _GOAL_FIELDS = ("title", "target", "current", "deadline", "status", "note")
 
 
-def _today_iso() -> str:
-    return datetime.now(_TZ).date().isoformat()
+def _resolve_tz(value) -> tzinfo:
+    """tzinfo из аргумента конструктора: ``None``/кривое → Europe/Moscow.
+
+    Принимает готовый ``tzinfo`` или строку IANA. Битое значение не роняет
+    Storage (обратная совместимость: старый вызов ``Storage(path)`` работает).
+    """
+    if value is None:
+        return _TZ
+    if isinstance(value, str):
+        name = value.strip()
+        if not name:
+            return _TZ
+        try:
+            return ZoneInfo(name)
+        except Exception:  # noqa: BLE001 — неизвестная зона/нет tzdata
+            return _TZ
+    if isinstance(value, tzinfo):
+        return value
+    return _TZ
 
 
-def _now_iso() -> str:
-    return datetime.now(_TZ).isoformat(timespec="seconds")
+def _today_iso(tz: tzinfo | None = None) -> str:
+    return datetime.now(_resolve_tz(tz)).date().isoformat()
+
+
+def _now_iso(tz: tzinfo | None = None) -> str:
+    return datetime.now(_resolve_tz(tz)).isoformat(timespec="seconds")
 
 
 def _text(value) -> str:
@@ -119,10 +143,18 @@ def _goal_from_row(row: sqlite3.Row) -> dict:
 
 
 class Storage:
-    """Обёртка над SQLite: сообщения, записи, цели, привычки, key-value."""
+    """Обёртка над SQLite: сообщения, записи, цели, привычки, key-value.
 
-    def __init__(self, db_path: str) -> None:
+    Args:
+        db_path: путь к файлу БД (или ``:memory:``).
+        tz: таймзона для полей времени — строка IANA или ``tzinfo``.
+            По умолчанию Europe/Moscow (обратная совместимость).
+        timezone: псевдоним ``tz`` (на случай вызова по имени из конфига).
+    """
+
+    def __init__(self, db_path: str, tz=None, timezone=None) -> None:
         self.db_path = str(db_path)
+        self.tz = _resolve_tz(tz if tz is not None else timezone)
         if self.db_path != ":memory:":
             Path(self.db_path).expanduser().parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
@@ -168,13 +200,22 @@ class Storage:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
+    # -------------------------------------------------------------- время
+    def _now_iso(self) -> str:
+        """Текущее время в таймзоне хранилища, ISO с оффсетом."""
+        return _now_iso(self.tz)
+
+    def _today_iso(self) -> str:
+        """Текущая дата в таймзоне хранилища (YYYY-MM-DD)."""
+        return _today_iso(self.tz)
+
     # ------------------------------------------------------------- сообщения
     def record_message(self, chat_id: int, direction: str, text: str,
                        slot: str | None = None) -> int:
         """Сохраняет сообщение диалога. direction: ``in`` (пользователь) / ``out``."""
         cursor = self._execute(
             "INSERT INTO messages(chat_id, direction, text, ts, slot) VALUES (?,?,?,?,?)",
-            (int(chat_id), _text(direction), _text(text), _now_iso(), slot),
+            (int(chat_id), _text(direction), _text(text), self._now_iso(), slot),
         )
         return int(cursor.lastrowid or 0)
 
@@ -197,8 +238,8 @@ class Storage:
         Недостающие date/ts подставляются текущим временем Москвы.
         """
         entry = dict(entry or {})
-        ts = _text(entry.get("ts")) or _now_iso()
-        date_value = _text(entry.get("date")) or ts[:10] or _today_iso()
+        ts = _text(entry.get("ts")) or self._now_iso()
+        date_value = _text(entry.get("date")) or ts[:10] or self._today_iso()
         metrics = entry.get("metrics")
         if isinstance(metrics, str):
             metrics_json = metrics if metrics.strip() else "{}"
@@ -298,7 +339,7 @@ class Storage:
         (например ``{"id": 5, "current": "7"}``).
         """
         goal = dict(goal or {})
-        now = _now_iso()
+        now = self._now_iso()
         goal_id = goal.get("id")
         try:
             goal_id = int(goal_id) if goal_id is not None else None
@@ -372,7 +413,7 @@ class Storage:
         name = _text(name).strip()
         if not name:
             return
-        day = _text(day).strip() or _today_iso()
+        day = _text(day).strip() or self._today_iso()
         row = self._execute(
             "SELECT id, streak, last_done FROM habits WHERE name = ?", (name,), commit=False
         ).fetchone()

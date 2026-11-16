@@ -301,3 +301,33 @@ class VaultTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class VaultCyrillicPathTestCase(unittest.TestCase):
+    """Путь vault как у пользователя: кириллица и пробелы."""
+
+    def test_cyrillic_and_spaces_in_vault_path(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="lifeos-vault-cyr-") as tmp:
+            vault_root = Path(tmp) / "чисто лайфик тест" / "чисто лайфик"
+            template = vault_root / "Шаблоны" / "Шаблон - День.md"
+            template.parent.mkdir(parents=True)
+            template.write_text("## Главное\n{{date}}\n", encoding="utf-8")
+            cfg = _support.make_cfg(obsidian__vault_path=str(vault_root))
+            storage = storage_mod.Storage(str(Path(tmp) / "база данных.sqlite"))
+            try:
+                vault = obsidian.Vault(cfg, storage=storage)
+                path = vault.ensure_daily("2026-11-16")
+                self.assertTrue(path.is_file())
+                self.assertIn("чисто лайфик тест", str(path))
+                entry_id = storage.add_entry({
+                    "date": "2026-11-16", "ts": "2026-11-16T12:00:00+03:00",
+                    "slot": "midday", "category": "food",
+                    "title": "обед", "text": "рис", "metrics": {},
+                })
+                entry = storage.entries("2026-11-16", "2026-11-16")[0]
+                entry["id"] = entry_id
+                self.assertTrue(vault.write_entry(entry))
+                self.assertIn("<!-- lifeos:entry:%d -->" % entry_id,
+                              path.read_text(encoding="utf-8"))
+            finally:
+                storage.close()

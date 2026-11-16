@@ -48,6 +48,8 @@
   "app": {
     "name": "Life OS",
     "timezone": "Europe/Moscow",
-    "lang": "ru"
+    "lang": "ru",
+    "onboarding": true,
+    "quiet_hours": ["23:00", "08:00"]
   }
 }

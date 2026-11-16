@@ -27,6 +27,13 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://api.samp.team/v1"
 DEFAULT_MODEL = "deepseek-v4.1-flash-1017"
 DEFAULT_TIMEOUT = 60.0
+#: Больше не ждём: ответ, которого нет 30 c, для диалога бесполезен.
+MAX_TIMEOUT = 30.0
+#: Потолок ответа модели: иначе 250k символов уезжают в чат и в дневник.
+MAX_REPLY_CHARS = 4000
+#: Circuit breaker: после стольких ошибок подряд LLM отключается на TTL.
+CB_FAILURES = 3
+CB_COOLDOWN_S = 600.0
 
 #: Явный User-Agent обязателен: Cloudflare у шлюза SAMP отвечает 403
 #: (error 1010) на дефолтный «Python-urllib/3.x». Проверено 2026-11-16.
@@ -192,6 +199,12 @@ class LLM:
         self.timeout = _as_float(llm_cfg.get("timeout"), DEFAULT_TIMEOUT)
         if self.timeout <= 0:
             self.timeout = DEFAULT_TIMEOUT
+        if self.timeout > MAX_TIMEOUT:
+            self.timeout = MAX_TIMEOUT
+
+        # Circuit breaker: не долбить мёртвый шлюз на каждом сообщении.
+        self._fail_streak = 0
+        self._disabled_until = 0.0
 
         # диагностика (без секретов): заполняется последней ошибкой
         self.last_error = None  # type: "str | None"
@@ -211,6 +224,16 @@ class LLM:
     def __repr__(self) -> str:
         return "LLM(model=%r, available=%r)" % (self.model, self.available())
 
+    def _note_failure(self) -> None:
+        """Считает ошибки подряд; после CB_FAILURES отключает LLM на TTL."""
+        self._fail_streak += 1
+        if self._fail_streak >= CB_FAILURES and time.monotonic() >= self._disabled_until:
+            self._disabled_until = time.monotonic() + CB_COOLDOWN_S
+            self._fail_streak = 0
+            logger.warning(
+                "LLM: %d ошибок подряд — выключаю «умные» вызовы на %d c",
+                CB_FAILURES, int(CB_COOLDOWN_S))
+
     # -- основной вызов ----------------------------------------------------
 
     def chat(self, messages: list, temperature: float = 0.7,
@@ -222,6 +245,10 @@ class LLM:
         """
         self.last_error = None
         self.last_status = None
+
+        if time.monotonic() < self._disabled_until:
+            self.last_error = "circuit_open"
+            return None
 
         if not self.available():
             self.last_error = "unavailable"
@@ -267,18 +294,24 @@ class LLM:
                     continue
                 # тело ошибки может содержать чувствительные данные — не логируем
                 logger.error("LLM: HTTP %s", exc.code)
+                self._note_failure()
                 return None
             except Exception as exc:  # URLError, таймаут, обрыв связи и т.п.
                 self.last_error = type(exc).__name__
                 logger.error("LLM: ошибка запроса (%s)", type(exc).__name__)
+                self._note_failure()
                 return None
 
             text = self._extract_text(raw)
             if text:
                 self.last_status = 200
+                self._fail_streak = 0
+                if len(text) > MAX_REPLY_CHARS:
+                    text = text[: MAX_REPLY_CHARS - 1].rstrip() + "…"
                 return text
             self.last_error = "empty"
             logger.error("LLM: пустой ответ модели")
+            self._note_failure()
             return None
 
         return None
