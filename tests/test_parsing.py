@@ -28,6 +28,30 @@ class HeuristicMetricsTestCase(unittest.TestCase):
         self.assertEqual(metrics["calories"], 600)
         self.assertEqual(metrics["protein_g"], 40)
 
+    def test_water_with_thousands_separator(self) -> None:
+        metrics = parsing.heuristic_metrics("выпил 2 000 мл воды")
+        self.assertEqual(metrics.get("water_ml"), 2000)
+        # NBSP — так число приходит из iOS-клавиатуры и «умного» копирования
+        metrics = parsing.heuristic_metrics("выпил 2\u00a0000 мл воды")
+        self.assertEqual(metrics.get("water_ml"), 2000)
+
+    def test_meeting_minutes_are_not_training(self) -> None:
+        self.assertNotIn("duration_min", parsing.heuristic_metrics("встреча 30 минут"))
+        self.assertNotIn("duration_min", parsing.heuristic_metrics("созвон 45 мин"))
+        # тренировка рядом с числом по-прежнему остаётся длительностью
+        self.assertEqual(
+            parsing.heuristic_metrics("тренировка 30 минут")["duration_min"], 30
+        )
+
+    def test_hours_at_computer_are_not_sleep(self) -> None:
+        self.assertNotIn("sleep_h", parsing.heuristic_metrics("час за компом"))
+        # «2 часа за компом» старый разбор записывал в сон
+        self.assertNotIn("sleep_h", parsing.heuristic_metrics("2 часа за компом"))
+
+    def test_sleep_hours_with_comma(self) -> None:
+        self.assertEqual(parsing.heuristic_metrics("спал 7,5 ч")["sleep_h"], 7.5)
+        self.assertEqual(parsing.heuristic_metrics("спал 7,5 часа")["sleep_h"], 7.5)
+
     def test_weight_and_distance(self) -> None:
         self.assertEqual(parsing.heuristic_metrics("Вешу 80 кг")["weight_kg"], 80)
         # вес штанги — это не вес тела
@@ -85,6 +109,16 @@ class ParseAnswerFallbackTestCase(unittest.TestCase):
         self.assertIn(entry["category"], parsing.CATEGORIES)
         self.assertTrue(entry["title"])
         self.assertTrue(entry["text"])
+
+    def test_question_about_food_keeps_food_category(self) -> None:
+        # «бегал по делам» — слабый сигнал тренировки, но вопрос был про еду
+        entry = parsing.parse_answer(
+            None, "free", "Что ел?", "весь день бегал по делам", NOW_ISO,
+        )
+        self.assertEqual(entry["category"], "food")
+        # нейтральный ответ без единого слова про еду — тоже food
+        entry = parsing.parse_answer(None, "midday", "Что ел?", "всё как обычно", NOW_ISO)
+        self.assertEqual(entry["category"], "food")
 
     def test_llm_unavailable_object_falls_back(self) -> None:
         llm = _support.FakeLLM(available=False,
@@ -150,6 +184,23 @@ class ParseAnswerLLMTestCase(unittest.TestCase):
         self.assertEqual(entry["category"], "food")
         self.assertEqual(entry["metrics"], {})
         self.assertTrue(entry["title"])
+
+    def test_water_unicode_thin_spaces(self) -> None:
+        """U+2009/U+2007/U+00A0/U+202F/U+3000 — разделители тысяч, не «2 мл»."""
+        for space in ("\u2009", "\u2007", "\u00a0", "\u202f", "\u3000"):
+            text = "выпил 2%s000 мл воды" % space
+            self.assertEqual(
+                parsing.heuristic_metrics(text).get("water_ml"), 2000,
+                "пробел U+%04X должен считаться разделителем тысяч" % ord(space))
+
+    def test_llm_liters_in_water_ml_converted(self) -> None:
+        """LLM иногда кладёт литры в water_ml: 1.5 → 1500 мл, а не 2 (P2 verifier)."""
+        llm = _support.FakeLLM(available=True, json_reply={
+            "category": "water", "title": "вода", "text": "выпил 1,5 л",
+            "metrics": {"water_ml": 1.5},
+        })
+        entry = parsing.parse_answer(llm, "midday", "Сколько воды?", "1,5 л", NOW_ISO)
+        self.assertEqual(entry["metrics"]["water_ml"], 1500)
 
     def test_llm_title_truncated(self) -> None:
         llm = _support.FakeLLM(available=True, json_reply={

@@ -359,7 +359,7 @@ class E2ERunner:
         self.check("в goals.md маркеры блока целей",
                    obsidian_mod.GOALS_START in text and obsidian_mod.GOALS_END in text)
         self.check("цель с вики-ссылкой и прогрессом",
-                   "[[Пробежать 10 км]]" in text and "30%" in text,
+                   "[[Пробежать 10 км]]" in text and "0%" in text,
                    text[:120].replace("\n", " | "))
         return text
 

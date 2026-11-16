@@ -210,6 +210,23 @@ class VaultTestCase(unittest.TestCase):
         self.assertNotIn("мусор", fixed)
         self.assertIn("Важная заметка пользователя.", fixed)
 
+    def test_weight_goal_progress_is_0_50_100(self) -> None:
+        """P0-1: «92 → 78» — 0%/50%/100%, а не 117,9% от current/target."""
+        goals_path = self.vault_root / "Проекты" / "Life OS" / "Цели.md"
+        goal_id = self.storage.upsert_goal({
+            "title": "Сбросить вес", "target": "78", "current": "92",
+            "start": "92", "direction": "down",
+        })
+        for current, expected in (("92", "0%"), ("85", "50%"), ("78", "100%")):
+            self.storage.upsert_goal({"id": goal_id, "current": current})
+            self.assertTrue(self.vault.rewrite_goals())
+            text = goals_path.read_text(encoding="utf-8")
+            line = next(row for row in text.splitlines()
+                        if "[[Сбросить вес]]" in row)
+            self.assertIn("| %s |" % expected, line,
+                          "current=%s: %s" % (current, line))
+            self.assertNotIn("117", line)
+
     def test_rewrite_goals_creates_file(self) -> None:
         self.storage.upsert_goal({"title": "Цель 1"})
         self.assertTrue(self.vault.rewrite_goals())

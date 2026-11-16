@@ -78,7 +78,8 @@ class DashboardDataTestCase(unittest.TestCase):
         self.assertIsNone(data["kpis"]["mood_avg"])
         self.assertIsNone(data["kpis"]["water_avg_ml"])
         self.assertEqual(data["kpis"]["streak_days"], 0)
-        self.assertEqual(data["kpis"]["training_days_week"], 0)
+        self.assertIsNone(data["kpis"]["training_days_week"],
+                          "нет данных, а не ложный ноль — осознанный контракт dashboard_data")
         self.assertEqual(data["series"]["dates"][-1], TODAY)
         self.assertEqual(len(data["series"]["dates"]), 14)
         self.assertEqual(data["series"]["sleep_h"], [None] * 14)
@@ -93,7 +94,10 @@ class DashboardDataTestCase(unittest.TestCase):
 
     def test_demo_database_full_schema(self) -> None:
         self.fill_demo()
-        data = dashboard_data.collect_data(self.cfg, self.storage, now=NOW)
+        # после фикса PII (security t9) дефолтный vault_path пуст — для проверки
+        # ссылки на страницу целей задаём базу Obsidian явно
+        cfg = _support.make_cfg(obsidian__vault_path="/tmp/vault")
+        data = dashboard_data.collect_data(cfg, self.storage, now=NOW)
         self.assertTrue(data["generated_at"].startswith(TODAY + "T12:00"))
         self.assertEqual(data["today"]["date"], TODAY)
         self.assertEqual(data["today"]["entries"], 5)
@@ -257,6 +261,53 @@ class BuildDashboardTestCase(unittest.TestCase):
         self.assertNotIn("<link rel=\"stylesheet\"", lowered)
         data = json.loads((out.parent / "data.json").read_text(encoding="utf-8"))
         self.assertTrue(data["feed"])
+
+
+
+class GoalProgressContractTestCase(unittest.TestCase):
+    """P0-1: дашборд считает прогресс тем же goals_math, что бот и Obsidian."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory(prefix="lifeos-goal-")
+        self.storage = storage_mod.Storage(
+            str(Path(self._tmp.name) / "goals.db"))
+        self.cfg = _support.make_cfg()
+
+    def tearDown(self) -> None:
+        self.storage.close()
+        self._tmp.cleanup()
+
+    def _progress(self, title: str) -> float:
+        self.storage.upsert_goal({"title": title, "start": "92",
+                                  "current": "85", "target": "78"})
+        data = dashboard_data.collect_data(self.cfg, self.storage, now=NOW)
+        return data["goals"][0]["progress"]
+
+    def test_weight_goal_is_50_percent_at_85(self) -> None:
+        self.assertAlmostEqual(self._progress("Сбросить вес"), 0.5, places=3)
+
+    def test_weight_goal_at_start_is_zero(self) -> None:
+        self.storage.upsert_goal({"title": "Сбросить вес", "start": "92",
+                                  "current": "92", "target": "78",
+                                  "direction": "down"})
+        data = dashboard_data.collect_data(self.cfg, self.storage, now=NOW)
+        self.assertEqual(data["goals"][0]["progress"], 0.0)
+
+    def test_weight_goal_at_target_is_100_percent(self) -> None:
+        self.storage.upsert_goal({"title": "Сбросить вес", "start": "92",
+                                  "current": "78", "target": "78"})
+        data = dashboard_data.collect_data(self.cfg, self.storage, now=NOW)
+        self.assertEqual(data["goals"][0]["progress"], 1.0)
+
+    def test_dashboard_matches_goals_math(self) -> None:
+        from src import goals_math
+
+        self.storage.upsert_goal({"title": "Сбросить вес", "start": "92",
+                                  "current": "85", "target": "78"})
+        goal = self.storage.goals()[0]
+        data = dashboard_data.collect_data(self.cfg, self.storage, now=NOW)
+        self.assertEqual(data["goals"][0]["progress"],
+                         goals_math.goal_fraction(goal))
 
 
 if __name__ == "__main__":

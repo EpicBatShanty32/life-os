@@ -324,13 +324,19 @@ def _normalize_category(value) -> "str | None":
 # ---------------------------------------------------------------------------
 
 #: Разделитель тысяч в разных видах: «2 000», «2 000», «2 000» (NBSP/thin space).
+#: Все Unicode-пробелы, которые встречаются в тексте: обычный, NBSP, тонкий и др.
+_UNICODE_SPACES_RE = re.compile(r"[\u00a0\u2000-\u200a\u202f\u205f\u3000]")
 _SPACE_GROUP_RE = re.compile(r"(?<=\d)[\u00a0\u202f ](?=\d{3}(?:\D|$))")
 
 
 def _normalize_spaces(text: str) -> str:
-    """Убирает разделители тысяч: «2 000 мл» → «2000 мл», «1 234,5» → «1234,5»."""
+    """Убирает разделители тысяч: «2 000 мл» → «2000 мл», «1 234,5» → «1234,5».
+
+    Сначала любые Unicode-пробелы (U+00A0, U+2009, U+202F, U+3000 …) становятся
+    обычным пробелом, иначе «2<U+2009>000 мл» превращалось в 2 мл.
+    """
     try:
-        cleaned = text.replace("\u00a0", " ").replace("\u202f", " ")
+        cleaned = _UNICODE_SPACES_RE.sub(" ", text)
         return _SPACE_GROUP_RE.sub("", cleaned)
     except Exception:
         return text
@@ -363,6 +369,9 @@ def _normalize_number(value, key: str):
     number = _to_number(value)
     if number is None:
         return None
+    if key == "water_ml" and 0 < number < 10:
+        # LLM иногда отдаёт литры («1,5 л») в поле water_ml — переводим в мл.
+        number = number * 1000
     low, high = _NUMERIC_RANGES[key]
     if key in _SCALE_KEYS:
         # шкалы 1–5: прижимаем, чтобы не терять сигнал «высокое/низкое»

@@ -9,6 +9,11 @@
 Storage (INTERFACES §3) и собирает словарь по схеме §9: today, kpis, series
 (14 дней), goals, habits, feed (5 последних записей), heatmap (8 недель).
 
+Окна периодов: серии графиков и средние по сну/настроению/воде — последние
+14 календарных дней Europe/Moscow, включая сегодня; недельные счётчики
+(отметки, тренировки, задачи) — последние 7 дней. Дубли записей по id/маркеру
+отбрасываются, чтобы вода и калории не считались дважды.
+
 ``build_dashboard`` вставляет этот словарь в ``dashboard/template.html`` как
 ``window.LIFEOS_DATA``, пишет ``paths.dashboard_out`` (по умолчанию
 ``dashboard/index.html``) и рядом ``data.json``, возвращает путь к HTML.
@@ -37,6 +42,11 @@ try:  # zoneinfo есть в Python 3.9+, но на всякий случай н
     from zoneinfo import ZoneInfo
 except Exception:  # pragma: no cover - экзотическое окружение
     ZoneInfo = None  # type: ignore[assignment]
+
+try:  # обычный запуск: from src import dashboard_data / python3 -m src.main
+    from . import goals_math
+except ImportError:  # запасной вариант: файл запущен как одиночный модуль
+    import goals_math  # type: ignore[no-redef]
 
 __all__ = ["build_dashboard", "collect_data"]
 
@@ -67,10 +77,6 @@ _NEGATIVE_TASK = ("не сделал", "не выполнил", "не успел
 _POSITIVE_TASK = ("сделал", "сделала", "выполнил", "выполнила", "готово",
                   "закрыл", "закончил", "done", "завершил")
 
-# Цели, у которых рост значения — это плохо (вес, похудение). Нужно для
-# direction-логики прогресса: current/target для них даёт ложные 100%.
-_DOWN_GOAL_RE = re.compile(r"вес|похуд|скинуть|сбросить", re.IGNORECASE)
-
 # Атомарная запись: уникальный temp-файл + несколько попыток os.replace.
 _WRITE_ATTEMPTS = 3
 _WRITE_RETRY_DELAY = 0.03
@@ -79,7 +85,6 @@ _TMP_PREFIX = ".lifeos-dashboard-"
 _NUM_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
 _DATE_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
 _TIME_RE = re.compile(r"[T\s](\d{2}):(\d{2})")
-_PERCENT_RE = re.compile(r"(\d{1,3}(?:[.,]\d+)?)\s*%")
 _SPACES_RE = re.compile(r"[\s\u00a0\u202f]+")
 
 
@@ -162,12 +167,9 @@ def _collect(cfg: dict, storage, now: datetime | None) -> dict:
     entries = _fetch_entries(storage, history_from.isoformat(), today_iso)
     days = _aggregate(entries)
 
-    week_start = today - timedelta(days=6)
-    week_dates = [(week_start + timedelta(days=i)).isoformat() for i in range(7)]
-    last14_dates = [
-        (today - timedelta(days=SERIES_DAYS - 1 - i)).isoformat()
-        for i in range(SERIES_DAYS)
-    ]
+    week_dates = _last_days(today, 7)
+    # last14_dates — ровно 14 календарных дней Europe/Moscow, включая today.
+    last14_dates = _last_days(today, SERIES_DAYS)
 
     # --- today -----------------------------------------------------------
     today_entries = days.get(today_iso, [])
@@ -184,6 +186,7 @@ def _collect(cfg: dict, storage, now: datetime | None) -> dict:
     # --- series (14 дней) ------------------------------------------------
     series = {
         "dates": last14_dates,
+        "window_days": SERIES_DAYS,
         "sleep_h": [
             _round(_day_mean(days, d, "sleep"), 1) for d in last14_dates
         ],
@@ -235,10 +238,7 @@ def _empty_payload(cfg: dict, now: datetime | None) -> dict:
     tz = _timezone_of(cfg)
     now_local = _local_now(now, tz)
     today = now_local.date()
-    dates = [
-        (today - timedelta(days=SERIES_DAYS - 1 - i)).isoformat()
-        for i in range(SERIES_DAYS)
-    ]
+    dates = _last_days(today, SERIES_DAYS)
     return {
         "generated_at": now_local.isoformat(timespec="seconds"),
         "today": {
@@ -248,16 +248,18 @@ def _empty_payload(cfg: dict, now: datetime | None) -> dict:
         },
         "kpis": {
             "streak_days": 0,
-            "checkin_rate_week": 0.0,
-            "training_days_week": 0,
+            "checkin_rate_week": None,
+            "training_days_week": None,
             "avg_sleep_h": None,
             "mood_avg": None,
-            "tasks_done_week": 0,
-            "tasks_planned_week": 0,
+            "tasks_done_week": None,
+            "tasks_planned_week": None,
             "water_avg_ml": None,
+            "window_days": SERIES_DAYS,
         },
         "series": {
             "dates": dates,
+            "window_days": SERIES_DAYS,
             "sleep_h": [None] * SERIES_DAYS,
             "mood": [None] * SERIES_DAYS,
             "energy": [None] * SERIES_DAYS,
@@ -273,57 +275,79 @@ def _empty_payload(cfg: dict, now: datetime | None) -> dict:
 
 
 def _kpis(days, entries, today, week_dates, last14_dates) -> dict:
-    """Ключевые показатели: неделя = последние 7 дней включая сегодня."""
-    week_entries_count = 0
+    """Ключевые показатели в двух явно названных окнах.
+
+    * Средние по сну, настроению и воде — последние 14 дней, то есть то же
+      окно, что у серий и подписей «14 дней». Раньше они считались за 7 дней
+      (14 — только запасной вариант), и число на карточке противоречило
+      подписи.
+    * Недельные счётчики (отметки, тренировки, задачи) — последние 7 дней
+      включая сегодня; их имена ключей и подписи в шаблоне говорят «неделя».
+    * Если данных нет, средние и счётчики тренировок/задач/отметок —
+      None (в UI «—» / «нет данных»), а не 0: ноль означал бы «измерено и
+      действительно равно нулю». Исключение — стрик: 0 здесь буквально
+      «нет серии подряд», это факт, а не пропуск.
+    """
     week_training = 0
+    training_known = False
     filled_slots = 0
+    week_entries = 0
     for iso in week_dates:
         day_entries = days.get(iso, [])
-        week_entries_count += len(day_entries)
+        week_entries += len(day_entries)
+        for entry in day_entries:
+            if _has_training_signal(entry):
+                training_known = True
         if _day_flag(days, iso, "training"):
             week_training += 1
         filled_slots += len({s for s in (_slot_of(e) for e in day_entries)
                              if s in WEEK_SLOTS})
 
-    # Проверка «чек-инов»: сколько из 21 слота (7 дней × 3) заполнено.
-    checkin_rate = round(min(1.0, max(0.0, filled_slots / 21.0)), 2)
+    # Проверка «чек-инов»: сколько слотов (7 дней × 3) заполнено.
+    # Нет ни одной записи за неделю — это «неизвестно», а не 0%.
+    slots_total = max(1, len(week_dates) * len(WEEK_SLOTS))
+    checkin_rate = (round(min(1.0, max(0.0, filled_slots / slots_total)), 2)
+                    if week_entries else None)
 
-    # Средние за неделю; если за неделю пусто — смотрим на 14 дней,
-    # чтобы карточка не пустовала при данных «недельной давности».
-    sleep_avg = _average_over(days, week_dates, "sleep")
-    if sleep_avg is None:
-        sleep_avg = _average_over(days, last14_dates, "sleep")
-    mood_avg = _average_over(days, week_dates, "mood")
-    if mood_avg is None:
-        mood_avg = _average_over(days, last14_dates, "mood")
-
-    water_avg = _average_of_sums(days, week_dates, "water")
-    if water_avg is None:
-        water_avg = _average_of_sums(days, last14_dates, "water")
+    # Средние — строго за 14 дней, без подмены недельным окном.
+    sleep_avg = _average_over(days, last14_dates, "sleep")
+    mood_avg = _average_over(days, last14_dates, "mood")
+    water_avg = _average_of_sums(days, last14_dates, "water")
 
     # Задачи: сначала metrics (tasks_done/tasks_planned), иначе эвристика.
+    # has_task_data отличает «задач не было в данных» (None) от «задач 0»
+    # (например, явный пустой список в metrics).
     done = 0
     planned = 0
     fallback_done = 0
+    has_task_data = False
     for iso in week_dates:
         for entry in days.get(iso, []):
             metrics = _metrics(entry)
+            # Ключ со значением null — это «неизвестно», а не «ноль».
+            if ((metrics.get("tasks_done") is not None)
+                    or (metrics.get("tasks_planned") is not None)):
+                has_task_data = True
             done += _count(metrics.get("tasks_done"))
             planned += _count(metrics.get("tasks_planned"))
             if _looks_like_done_task(entry):
                 fallback_done += 1
-    if done == 0 and planned == 0:
+    if not has_task_data and fallback_done:
+        has_task_data = True
         done = fallback_done
 
     return {
         "streak_days": _streak(days, today),
         "checkin_rate_week": checkin_rate,
-        "training_days_week": week_training,
+        "training_days_week": week_training if training_known else None,
         "avg_sleep_h": _round(sleep_avg, 1),
         "mood_avg": _round(mood_avg, 1),
-        "tasks_done_week": int(done),
-        "tasks_planned_week": int(max(planned, done)),
+        "tasks_done_week": int(done) if has_task_data else None,
+        "tasks_planned_week": (int(max(planned, done))
+                               if has_task_data else None),
         "water_avg_ml": _round_int(water_avg),
+        # Окно средних видно в данных, а не только в шаблоне.
+        "window_days": SERIES_DAYS,
     }
 
 
@@ -339,14 +363,73 @@ def _streak(days: dict, today: date) -> int:
     return count
 
 
+def _entry_signature(entry: dict):
+    """Устойчивый отпечаток записи для случая, когда нет id и маркера."""
+    metrics = _metrics(entry)
+    try:
+        metrics_text = json.dumps(metrics, sort_keys=True, ensure_ascii=False,
+                                  default=str)
+    except (TypeError, ValueError):
+        metrics_text = str(metrics)
+    return tuple(
+        "" if entry.get(field) is None else str(entry.get(field))
+        for field in ("date", "ts", "slot", "category", "title", "text", "raw")
+    ) + (metrics_text,)
+
+
+def _dedupe_entries(entries: list) -> list:
+    """Убрать повторно попавшие записи по id/маркеру.
+
+    Хранилище может отдать одну и ту же запись дважды (повторный импорт,
+    склейка источников, ретрай). Если есть ``id`` — ключ по нему; иначе по
+    ``marker``/``dedup_key``; если нет ни того, ни другого — по отпечатку
+    содержимого (только для полностью пустых по id/маркеру записей, чтобы
+    не склеить две разные записи с одинаковым временем).
+    """
+    result = []
+    seen_ids = set()
+    seen_markers = set()
+    seen_signatures = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        entry_id = entry.get("id")
+        marker = (entry.get("marker") or entry.get("dedup_key")
+                  or entry.get("uid"))
+        duplicate = False
+        if entry_id not in (None, ""):
+            key = ("id", str(entry_id).strip())
+            if key in seen_ids:
+                duplicate = True
+            else:
+                seen_ids.add(key)
+        if not duplicate and marker not in (None, ""):
+            key = ("marker", str(marker).strip())
+            if key in seen_markers:
+                duplicate = True
+            else:
+                seen_markers.add(key)
+        if (not duplicate and entry_id in (None, "")
+                and marker in (None, "")):
+            key = ("sig", _entry_signature(entry))
+            if key in seen_signatures:
+                duplicate = True
+            else:
+                seen_signatures.add(key)
+        if not duplicate:
+            result.append(entry)
+    return result
+
+
 def _aggregate(entries: list) -> dict:
     """Сгруппировать записи по дате и извлечь метрики.
 
     Возвращает {YYYY-MM-DD: [entry, ...]} — дальше статистика считается
-    по этому словарю и по «метрическим» аккумуляторам ниже.
+    по этому словарю и по «метрическим» аккумуляторам ниже. Дубли
+    отбрасываются, иначе вода/калории/задачи посчитаются дважды.
     """
     by_date: dict = {}
-    for entry in entries:
+    for entry in _dedupe_entries(entries):
         iso = entry["date"]
         by_date.setdefault(iso, []).append(entry)
     return by_date
@@ -444,65 +527,14 @@ def _goals(cfg: dict, storage) -> list:
     return goals
 
 
-def _goal_direction(goal: dict) -> str:
-    """Направление цели: ``down`` (чем меньше, тем лучше) или ``up``.
-
-    Схему Storage не меняем: если хранилище отдало ``direction`` — уважаем
-    его (``up``/``down`` и русские синонимы). Иначе весовые цели определяем
-    по названию («вес», «похудеть», «скинуть», «сбросить») — для них рост
-    значения означает движение назад, а не 100%.
-    """
-    raw = goal.get("direction") if isinstance(goal, dict) else None
-    if isinstance(raw, str):
-        value = raw.strip().lower()
-        if value in ("down", "вниз", "снижение", "уменьшение", "меньше",
-                     "похудение", "сбросить"):
-            return "down"
-        if value in ("up", "вверх", "рост", "увеличение", "больше"):
-            return "up"
-    title = str(goal.get("title") or "") if isinstance(goal, dict) else ""
-    return "down" if _DOWN_GOAL_RE.search(title) else "up"
-
-
 def _goal_progress(goal: dict) -> float:
-    """Прогресс 0..1: current/target, статус done, или процент из текста.
+    """Прогресс цели 0..1 — единый расчёт в :mod:`src.goals_math`.
 
-    Для убывающих целей (вес и т.п.) при ``current > target`` формула
-    ``current/target`` давала ложные 100%; считаем оставшийся путь
-    относительно текущего значения:
-    ``1 - (current - target) / max(current, 1)``. Если цель уже достигнута
-    (``current <= target``), работает обычная формула роста.
+    Раньше формула жила здесь и расходилась с ботом и Obsidian
+    (UX_REVIEW, P0-1): обёртка оставлена, чтобы точка входа дашборда
+    не менялась, но считает теперь общий модуль.
     """
-    status = str(goal.get("status") or "").strip().lower()
-    if status in ("done", "completed", "complete", "выполнена", "выполнено",
-                  "готово", "завершена", "закрыта"):
-        return 1.0
-
-    direct = goal.get("progress")
-    direct_num = _num(direct)
-    if direct_num is not None and 0 <= direct_num <= 1:
-        return round(float(direct_num), 3)
-
-    target = _num(goal.get("target"))
-    current = _num(goal.get("current"))
-    progress = None
-    if target is not None and target > 0 and current is not None:
-        if current > target and _goal_direction(goal) == "down":
-            progress = 1.0 - (current - target) / max(current, 1.0)
-        else:
-            progress = current / target
-    if progress is None:
-        # Иногда прогресс записан как «60%» в current/note.
-        for field in ("current", "note", "target"):
-            match = _PERCENT_RE.search(str(goal.get(field) or ""))
-            if match:
-                progress = _num(match.group(1))
-                if progress is not None:
-                    progress = progress / 100.0
-                break
-    if progress is None:
-        return 0.0
-    return round(min(1.0, max(0.0, progress)), 3)
+    return goals_math.goal_fraction(goal)
 
 
 def _goal_link(cfg: dict, title: str) -> str:
@@ -613,7 +645,7 @@ def _fetch_entries(storage, date_from: str, date_to: str) -> list:
         entry = dict(item)
         entry["date"] = iso
         entries.append(entry)
-    return entries
+    return _dedupe_entries(entries)
 
 
 def _safe_call(call, default, what: str):
@@ -837,6 +869,20 @@ def _local_now(now, tz) -> datetime:
     return datetime.now(tz)
 
 
+def _last_days(today: date, count: int) -> list:
+    """ISO-даты последних ``count`` календарных дней, включая ``today``.
+
+    Старые → новые; ``_last_days(2026-11-16, 14)[-1] == "2026-11-16"``.
+    Границы считаются по локальной дате (Europe/Moscow по умолчанию), а не
+    по UTC, иначе вечером 16-го можно получить окно, кончающееся 15-м.
+    """
+    count = max(0, int(count))
+    if isinstance(today, datetime):
+        today = today.date()
+    return [(today - timedelta(days=count - 1 - index)).isoformat()
+            for index in range(count)]
+
+
 def _norm_date(value) -> str | None:
     """Привести дату к YYYY-MM-DD (или None, если не получилось)."""
     if isinstance(value, datetime):
@@ -993,6 +1039,26 @@ def _is_training(entry: dict) -> bool:
     if entry.get("category") == "training":
         return not negative
     return False
+
+
+def _has_training_signal(entry: dict) -> bool:
+    """Есть ли в записи хоть какая-то информация о тренировке.
+
+    Нужно, чтобы отличать «тренировок 0» (человек отметил отдых или
+    тренировку) от «про тренировки данных нет» (None, а не ложный ноль).
+    """
+    if not isinstance(entry, dict):
+        return False
+    if _is_training(entry):
+        return True
+    metrics = _metrics(entry)
+    if any(key in metrics for key in ("duration_min", "training_type",
+                                      "training")):
+        return True
+    if entry.get("category") == "training":
+        return True
+    text = _text_of(entry)
+    return any(marker in text for marker in _NEGATIVE_TRAINING)
 
 
 def _looks_like_done_task(entry: dict) -> bool:

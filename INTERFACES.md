@@ -17,6 +17,7 @@ telegram-life-agent/
 │   ├── config.py        # bot-core
 │   ├── telegram.py      # bot-core
 │   ├── storage.py       # bot-core
+│   ├── goals_math.py    # bot-core — единый прогресс целей (§15)
 │   ├── scheduler.py     # bot-core
 │   ├── llm.py           # brain
 │   ├── prompts.py       # brain
@@ -30,6 +31,7 @@ telegram-life-agent/
 ├── tests/               # qa
 │   ├── test_config.py test_storage.py test_telegram.py test_scheduler.py
 │   ├── test_obsidian.py test_parsing.py test_dashboard.py
+│   ├── test_goals_math.py test_install.py
 │   └── e2e_mock.py
 ├── ops/com.lifeos.agent.plist
 └── data/ logs/ (генерируется)
@@ -102,16 +104,52 @@ class Storage:
 
     # цели
     def goals(self) -> list[dict]
-        # [{"id","title","target","current","deadline","status","note",
-        #   "created","updated"}] — все, новые сначала
+        # [{"id","title","target","current","start","direction","deadline",
+        #   "status","note","created","updated"}] — все, новые сначала.
+        # "start" — стартовая точка цели (текущее значение в момент создания),
+        # "direction" — "up"/"down"; по ним :mod:`src.goals_math` считает прогресс
+        # одинаково в боте, дашборде и «Цели.md» (§15).
     def get_goal(self, goal_id: int) -> dict | None
     def upsert_goal(self, goal: dict) -> int     # без id — вставка; с id — update
+        # При update достаточно только меняющихся полей: upsert_goal({"id": 5,
+        # "current": "7"}). "title" пустым не затирается.
     def delete_goal(self, goal_id: int) -> None
 
     # привычки (факультативно, дашборд)
     def habits(self) -> list[dict]
+        # [{"name","streak","last_done","total"}], порядок добавления;
+        # заполняется командой бота «/habit <название>» (§8)
     def touch_habit(self, name: str, date: str) -> None
+        # отметить за date (YYYY-MM-DD); повторный вызов за ту же дату
+        # ничего не меняет (идемпотентно); streak растёт только за подряд
+        # идущие дни, иначе начинается с 1
 ```
+
+**Схема таблицы `goals`** (SQLite, актуальная):
+
+```sql
+CREATE TABLE goals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    target TEXT,
+    current TEXT,
+    start TEXT,          -- стартовая точка: текущее значение в момент создания
+    direction TEXT,      -- "up" | "down"; пусто — определить по названию (§15)
+    deadline TEXT,
+    status TEXT DEFAULT 'active',
+    note TEXT,
+    created TEXT,
+    updated TEXT
+);
+```
+
+**Миграция старых БД.** Таблица `goals` в текущей схеме содержит `start TEXT`
+и `direction TEXT`. Обе колонки появились позже первой версии схемы, поэтому
+`Storage.__init__` после `CREATE TABLE IF NOT EXISTS` смотрит
+`PRAGMA table_info(goals)` и добавляет недостающие через
+`ALTER TABLE goals ADD COLUMN …` (`_GOAL_MIGRATIONS`, идемпотентно). Старая БД
+открывается без ручных действий; у целей, созданных до миграции, `start` и
+`direction` пустые — прогресс для них считается по формуле без старта (§15).
 
 ## 4. llm.py
 
@@ -218,10 +256,18 @@ class Scheduler:
         # команды → ответ; иначе — диалог: сессия (ответ на текущий вопрос,
         # follow-up, следующий вопрос) или свободный чат (LLM-ответ + парсинг
         # и сохранение entry). Всегда отвечает пользователю.
+        # Команды: /start /status /today /report /goals /add_goal /habit
+        # /habits /skip /pause /resume /дизайн /stop /help (+ русские алиасы
+        # в _COMMAND_ALIASES; help_text() — источник правды для README).
+        #   /habit <название> — storage.touch_habit(название, сегодня), ответ
+        #       с серией; сразу пересобирает дашборд (привычка видна там же).
+        #   /habits — storage.habits() списком: серия, «сегодня ✅»,
+        #       последняя дата.
     def status_text(self) -> str
     def today_text(self) -> str
     def report_text(self) -> str
     def goals_text(self) -> str
+    def habits_text(self) -> str
 
 # состояние сессии в kv: ключ "session" → JSON
 # {"slot","idx","step":"question|followup|done","followups":n,
@@ -251,6 +297,9 @@ def collect_data(cfg: dict, storage: Storage, now: datetime | None = None) -> di
      "feed": [{"date","time","category","text"}],
      "heatmap": {"start","weeks":8,"cells":[{"date","count"}]}}
     """
+    # "progress" цели — goals_math.goal_fraction(), тот же процент, что в боте
+    # и в «Цели.md» (§15). "habits" — из storage.habits() (серия и последняя
+    # отметка), карточка «Привычки» рисует серию и недельную полосу отметок.
 ```
 
 ## 10. main.py (bot-core)
@@ -306,6 +355,9 @@ Daily note (дописывается):
 | [[Цель 200к (БТ)]] | 60% | 2027-06-01 | активна |
 <!-- lifeos:goals:end -->
 ```
+Прогресс в этой таблице — `goals_math.goal_percent()`, ровно тот же процент,
+что показывает бот (`/goals`) и полоса на дашборде (§15). Если у цели нет
+чисел и процентов вовсе, вместо процента печатается текущее значение или «—».
 
 ## 14. Правила для команды
 
@@ -315,3 +367,50 @@ Daily note (дописывается):
 4. Секреты (токен, LLM-ключ) в коде и логах не появляются.
 5. Тесты/демо — в temp-каталогах, не в живой Obsidian-базе.
 6. Готово → отчёт Lead: что сделано, как проверял, что осталось.
+
+## 15. goals_math.py (bot-core) — единый прогресс целей
+
+Модуль выделен позже: раньше формула прогресса была своя в боте, в дашборде
+и в «Цели.md», и они расходились — цель «вес 92 → 78» показывала на дашборде
+0%, а в боте 94,7%. Теперь расчёт один, а витрины только оборачивают его:
+
+| Где | Обёртка | Что отдаёт |
+|---|---|---|
+| бот (`/goals`) | `Scheduler._goal_progress` | целые проценты 0…100 или `None` |
+| дашборд (полоса) | `dashboard_data._goal_progress` | доля 0…1 |
+| Obsidian (`Цели.md`) | `Vault._goal_progress` | строка `0%` / `50%` / `100%` |
+
+```python
+def goal_direction(goal: dict) -> str
+    # "up" (больше — лучше, по умолчанию) или "down".
+    # Поле goal["direction"] главнее названия: "down"/"вниз"/"снижение"/
+    # "уменьшение"/"меньше"/"похудение"/"сбросить" → "down",
+    # "up"/"вверх"/"рост"/"увеличение"/"больше" → "up".
+    # Без поля — по названию: «вес», «похуд», «скинуть», «сбросить» → "down";
+    # исключение «набрать вес»/«набор веса»/«поправиться» → "up".
+
+def goal_start(goal: dict) -> float | None
+    # Стартовая точка: goal["start"] (синонимы: start_value, initial,
+    # baseline). None — цель создана до появления колонки start.
+
+def goal_fraction(goal: dict) -> float
+    # Прогресс 0..1, округлён до тысячных; не бросает никогда.
+    # Приоритет источников: status «выполнена» → 1.0; goal["progress"]
+    # (доля 0..1 или проценты «60%»/60) → как записано; иначе числа
+    # current/target/start:
+    #   рост:     (current - start) / (target - start)
+    #   снижение: (start - current) / (start - target)
+    # Без start: рост — current / target; снижение — 0%, пока current > target
+    # (100% при current <= target): базовая точка неизвестна, и «почти 100%»
+    # только из-за близости к цели было бы выдумкой.
+    # Degenerate-случаи: start == target → формула без старта; target == 0 →
+    # 100% только по нужную сторону нуля; bool/NaN/Infinity/мусор → 0.0.
+
+def goal_percent(goal: dict) -> int | None
+    # round(goal_fraction(goal) * 100) — целые проценты; None только когда
+    # у цели нет ни чисел, ни процентов (тогда витрины не печатают «%»).
+```
+
+Инварианты (закреплены `tests/test_goals_math.py`): «start=92, current=85,
+target=78, down» → 0.5 (50%); current == start → 0%; current == target → 1.0
+(100%); цель с одним `target` → 0%, как и полоса на дашборде.

@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS goals (
     title TEXT,
     target TEXT,
     current TEXT,
+    start TEXT,
+    direction TEXT,
     deadline TEXT,
     status TEXT DEFAULT 'active',
     note TEXT,
@@ -78,7 +80,15 @@ CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
 CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
 """
 
-_GOAL_FIELDS = ("title", "target", "current", "deadline", "status", "note")
+_GOAL_FIELDS = ("title", "target", "current", "start", "direction", "deadline",
+                "status", "note")
+
+#: Колонки goals, появившиеся после первых релизов: старым БД их добавляет
+#: миграция в Storage.__init__ (``ALTER TABLE ... ADD COLUMN``).
+_GOAL_MIGRATIONS = (
+    ("start", "ALTER TABLE goals ADD COLUMN start TEXT"),
+    ("direction", "ALTER TABLE goals ADD COLUMN direction TEXT"),
+)
 
 
 def _resolve_tz(value) -> tzinfo:
@@ -171,7 +181,28 @@ class Storage:
             self._conn.execute("PRAGMA synchronous=NORMAL")
             self._conn.execute("PRAGMA busy_timeout=5000")
             self._conn.executescript(_SCHEMA)
+            self._migrate()
             self._conn.commit()
+
+    def _migrate(self) -> None:
+        """Догоняет схему старой БД до текущей (идемпотентно).
+
+        ``CREATE TABLE IF NOT EXISTS`` не добавляет колонки в уже существующую
+        таблицу, а ``goals.start``/``goals.direction`` появились позже первых
+        релизов: без миграции старые БД падали бы на ``SELECT *`` + новых
+        полях в ``upsert_goal``.
+        """
+        try:
+            rows = self._conn.execute("PRAGMA table_info(goals)").fetchall()
+        except sqlite3.DatabaseError:
+            return  # :memory:/экзотическая ФС — не роняем Storage
+        columns = {row["name"] for row in rows}
+        for name, ddl in _GOAL_MIGRATIONS:
+            if name not in columns:
+                try:
+                    self._conn.execute(ddl)
+                except sqlite3.DatabaseError:
+                    pass  # колонка уже есть или БД только для чтения
 
     # -------------------------------------------------------------- служебное
     def _execute(self, sql: str, params=(), commit: bool = True):
@@ -336,7 +367,9 @@ class Storage:
         """Вставляет цель (без id) или обновляет существующую (с id).
 
         При обновлении достаточно передать только меняющиеся поля
-        (например ``{"id": 5, "current": "7"}``).
+        (например ``{"id": 5, "current": "7"}``). ``start`` — стартовая точка
+        цели, ``direction`` — ``up``/``down`` (см. ``goals_math``): по ним
+        считается прогресс одинаково в боте, дашборде и Obsidian.
         """
         goal = dict(goal or {})
         now = self._now_iso()
@@ -374,17 +407,11 @@ class Storage:
         title = _text(goal.get("title")).strip()
         if not title:
             raise ValueError("upsert_goal: у новой цели обязательно должно быть название (title)")
+        row = {field: _text(goal.get(field)) for field in _GOAL_FIELDS}
+        row["title"] = title
+        row["status"] = row["status"] or "active"
         columns = list(_GOAL_FIELDS) + ["created", "updated"]
-        values = [
-            title,
-            _text(goal.get("target")),
-            _text(goal.get("current")),
-            _text(goal.get("deadline")),
-            _text(goal.get("status")) or "active",
-            _text(goal.get("note")),
-            now,
-            now,
-        ]
+        values = [row[field] for field in _GOAL_FIELDS] + [now, now]
         if goal_id is not None:
             columns.insert(0, "id")
             values.insert(0, goal_id)

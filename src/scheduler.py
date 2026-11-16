@@ -22,11 +22,22 @@ import time
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from src import parsing, prompts
+from src import goals_math, parsing, prompts, telegram
 
 __all__ = ["Scheduler"]
 
 _SLOT_ORDER = ("morning", "midday", "evening", "weekly")
+
+#: Максимальная длина ответа LLM перед отправкой, в символах (F2 адверсариального
+#: теста). Меньше лимита одного сообщения Bot API (4000 UTF-16 units), поэтому
+#: даже «простыня» от модели уходит одним сообщением, а не 25 чанками.
+MAX_REPLY_CHARS = 3500
+#: Бюджет истории диалога для LLM, в символах (F2). Старые сообщения
+#: отбрасываются целиком; текущее сообщение посередине не режется.
+MAX_HISTORY_CHARS = 12000
+#: Лимит размера значения сессии в kv, в байтах (F9): слишком большая сессия
+#: сбрасывается с предупреждением, а не читается на каждом сообщении/тике.
+MAX_SESSION_BYTES = 32 * 1024
 
 # Подписи на случай, если prompts.SLOT_LABELS недоступны/изменены.
 _FALLBACK_SLOT_LABELS = {
@@ -66,28 +77,30 @@ _SKIP_TOKENS = {"-", "—", "–", "пропустить", "пропусти", "
 _STOP_TOKENS = {"стоп", "stop", "хватит", "прекрати", "отмена"}
 
 # Если prompts.scripted_questions сломается, бот всё равно должен спрашивать.
+# Порядок тем совпадает с _SLOT_TOPICS: иначе уточнения и пропуски «поедут».
 _FALLBACK_QUESTIONS = {
     "morning": [
-        "Какой у тебя план на сегодня?",
-        "Какие три главные задачи?",
-        "Как дела с целями — что продвинет их сегодня?",
+        "Что главное должно случиться сегодня?",
+        "Какие 2–3 задачи к этому ведут?",
+        "Что с целями — какая сейчас важнее всего?",
     ],
     "midday": [
-        "Что уже ел сегодня?",
+        "Что уже ел?",
         "Сколько воды выпил?",
-        "Как энергия и настроение?",
+        "Как энергия и фокус — от 1 до 5?",
     ],
     "evening": [
-        "Как прошла тренировка (или движение/прогулка)?",
+        "Как прошла тренировка?",
         "Что сделал по задачам, что перенёс?",
-        "Что по еде за день и как самочувствие?",
-        "Как настроение, энергия и фокус?",
+        "Что было по еде за день?",
+        "Как настроение и энергия — от 1 до 5?",
         "Что важного произошло, о чём стоит помнить?",
     ],
     "weekly": [
-        "Что было главным на этой неделе?",
-        "Что получилось, а что нет?",
-        "Что хочется изменить на следующей неделе?",
+        "Что получилось на неделе, а что не вышло?",
+        "Как неделя по телу: сон, еда, тренировки?",
+        "Что с целями — что сдвинулось, где застрял?",
+        "Что главное на следующую неделю?",
     ],
 }
 _FALLBACK_GREETINGS = {
@@ -102,6 +115,184 @@ _CLOSING_TEXTS = {
     "evening": "Спасибо за день и за искренность. Всё сохранил, дашборд обновил. Отдыхай.",
     "weekly": "Спасибо! Итоги недели сохранил. Дальше — по плану новой недели.",
 }
+
+# Темы вопросов по слотам: нужны, чтобы (а) не задавать вопрос, на который
+# человек уже ответил в том же сообщении (UX_REVIEW P1-4), и (б) подобрать
+# осмысленное уточнение без LLM (UX_REVIEW P1-5).
+_SLOT_TOPICS = {
+    "morning": ("plan", "tasks", "goals"),
+    "midday": ("food", "water", "wellbeing"),
+    "evening": ("training", "tasks", "food", "wellbeing", "journal"),
+    "weekly": ("week_review", "body", "goals", "next_week"),
+}
+
+#: Ключевые слова, по которым видно, что тема уже раскрыта. Специально узкие:
+#: общие слова вроде «план» не считаем ответом на вопрос про задачи.
+_TOPIC_PATTERNS = {
+    "tasks": re.compile(
+        r"\bзадач\w*|\bвыполн\w*|\bперенёс\w*|\bперенес\w*|\bуспел\w*"
+        r"|дедлайн\w*|\bзакрыл[аи]?\s+(?:задач|план|этап)",
+        re.IGNORECASE | re.UNICODE),
+    "goals": re.compile(
+        r"\bцел(?:ь|и|ью|ей|ям|ях|ями|евая|евой)\b|прогресс\w*|\bрубеж\w*"
+        r"|продвинул\w*",
+        re.IGNORECASE | re.UNICODE),
+    "food": re.compile(
+        r"\bел\w*|\bсъел\w*|\bпоел\w*|\bеда\b|\bзавтрак\w*|\bобед\w*|\bужин\w*"
+        r"|\bперекус\w*|\bкалори\w*|\bпорци\w*|\bблюд\w*|\bкофе\b|\bчай\b"
+        r"|\bсалат\w*|\bсуп\w*|\bрис\b|\bкуриц\w*|\bтворог\w*|\bбанан\w*"
+        r"|\bяблок\w*|\bхлеб\w*|\bмакарон\w*|\bпицц\w*|\bбургер\w*|\bомлет\w*",
+        re.IGNORECASE | re.UNICODE),
+    "water": re.compile(
+        r"\bвод(?:а|ы|у|ой|е)\b|\bмл\b|миллилитр\w*|\bлитр\w*|\bвыпил\w*"
+        r"|\bбутылк\w*|\bстакан\w*",
+        re.IGNORECASE | re.UNICODE),
+    "training": re.compile(
+        r"трениров\w*|\bзал\b|\bжим\w*|присед\w*|\bбег\w*|пробеж\w*|кардио\w*"
+        r"|\bйог\w*|растяж\w*|плава\w*|турник\w*|подтягива\w*|штанг\w*|гантел\w*"
+        r"|кроссфит\w*|\bспорт\w*|велосипед\w*|\bлыж\w*|отжима\w*",
+        re.IGNORECASE | re.UNICODE),
+    "wellbeing": re.compile(
+        r"настроени\w*|энерги\w*|фокус\w*|самочувств\w*|тревог\w*|стресс\w*"
+        r"|\bустал\w*|апати\w*|радост\w*|груст\w*|разбит\w*",
+        re.IGNORECASE | re.UNICODE),
+    "journal": re.compile(
+        r"\bдумал\w*|мысл\w*|тревож\w*|пережива\w*|вспомн\w*|\bчувств\w*"
+        r"|хорошего\b|важного\b",
+        re.IGNORECASE | re.UNICODE),
+}
+
+#: Винительный падеж для человеческой фразы «про … ты уже рассказал».
+_TOPIC_LABELS = {
+    "tasks": "задачи",
+    "goals": "цели",
+    "food": "еду",
+    "water": "воду",
+    "training": "тренировку",
+    "wellbeing": "самочувствие",
+    "journal": "мысли",
+}
+
+#: Уточнения без LLM — по теме текущего вопроса, но сформулированы иначе,
+#: чтобы не повторять исходный вопрос слово в слово (UX_REVIEW P1-5).
+_TOPIC_FOLLOWUPS = {
+    "tasks": "Назови хотя бы одну конкретную задачу — с неё и начнём.",
+    "goals": "Про какую цель речь — и что по ней сейчас?",
+    "food": "Хотя бы одно блюдо — что было на тарелке?",
+    "water": "Хотя бы примерно: пол-литра, литр?",
+    "training": "Сколько примерно заняло и что делал?",
+    "wellbeing": "Хотя бы примерно — ближе к 2 или к 4?",
+    "journal": "Одно слово или одна мысль — что больше всего задело?",
+    "plan": "Одно конкретное дело, которое сегодня важнее остальных?",
+    "week_review": "Хотя бы одно, что получилось, — и одно, что нет?",
+    "body": "Хотя бы одно: как спал или что ел на неделе?",
+    "next_week": "Одна главная вещь на следующую неделю — какая?",
+}
+_FOLLOWUP_FALLBACKS = {
+    "morning": "Хотя бы одно конкретное дело на сегодня?",
+    "midday": "Хотя бы один пример — что именно?",
+    "evening": "Одна мысль или одно событие, которое запомнилось?",
+    "weekly": "Хотя бы одно, что получилось за неделю?",
+}
+
+#: Ответы-заглушки: смысла в них мало, поэтому уточняем (UX_REVIEW P1-5).
+#: Короткие подтверждения в свободном чате («ок», «понял»): это не запись
+#: дневника. Без этого «ок» оседало в /today как заметка (UX_REVIEW, P2).
+_ACK_TOKENS = {
+    "ок", "окей", "ok", "okay", "хорошо", "норм", "нормально",
+    "ага", "угу", "да", "нет", "супер", "отлично", "понял", "поняла",
+    "понятно", "ясно", "ладно", "принято", "👍",
+}
+_ACK_SPLIT_RE = re.compile(r"[^\wА-Яа-яЁё]+", re.UNICODE)
+
+
+def _is_ack_only(text: str) -> bool:
+    """True, если текст состоит только из подтверждений: «ок», «ладно, понял».
+
+    «ладно, понял» — два подтверждения подряд, тоже не запись дневника.
+    Эмодзи («👍») отбрасываются разделителем, поэтому одиночный токен
+    проверяем ещё и по исходной строке.
+    """
+    stripped = text.strip()
+    if not stripped:
+        return False
+    if stripped.strip("!.,… ") in _ACK_TOKENS:
+        return True
+    words = [word for word in _ACK_SPLIT_RE.split(stripped) if word]
+    return bool(words) and all(word in _ACK_TOKENS for word in words)
+_VAGUE_ANSWERS = {
+    "норм", "нормально", "норма", "ок", "окей", "ok", "okay", "хорошо", "плохо",
+    "хз", "не знаю", "не помню", "неважно", "пока не знаю", "всё нормально",
+    "все нормально", "всё хорошо", "все хорошо", "как обычно", "обычно",
+    "ничего", "нечего", "нет", "да", "ага", "угу", "да нормально",
+    "более-менее", "более менее", "так себе", "средне", "пойдёт", "пойдет",
+    "неплохо", "супер", "отлично",
+}
+_VAGUE_MARKERS = (
+    "без подробност", "не хочу рассказ", "не буду", "неважно", "не помню",
+    "не знаю", "как обычно", "ничего особенного", "ничего нового",
+    "нечего сказать", "пропущу",
+)
+#: Слова, которые в коротком ответе ещё не раскрывают тему.
+_VAGUE_WORDS = {"норм", "нормально", "хорошо", "плохо", "ок", "окей", "обычно",
+                "устал", "устала", "средне", "неплохо", "супер", "отлично"}
+_WORD_RE = re.compile(r"[\wА-Яа-яЁё]+", re.UNICODE)
+_DIGIT_RE = re.compile(r"\d", re.UNICODE)
+
+#: Признаки содержательного рассказа о жизни — по ним свободный текст
+#: сохраняется в дневник, а не превращается в болтовню с записью (UX_REVIEW P1-6).
+_LIFE_SIGNAL_RE = re.compile(
+    r"\bел\w*|\bсъел\w*|\bпоел\w*|\bеда\b|\bзавтрак\w*|\bобед\w*|\bужин\w*"
+    r"|\bперекус\w*|\bкалори\w*|\bпорци\w*|\bблюд\w*|\bкофе\b|\bчай\b"
+    r"|\bсалат\w*|\bсуп\w*|\bрис\b|\bкуриц\w*|\bтворог\w*|\bбанан\w*"
+    r"|\bяблок\w*|\bхлеб\w*|\bмакарон\w*|\bпицц\w*|\bбургер\w*|\bомлет\w*"
+    r"|трениров\w*|\bзал\b|\bжим\w*|присед\w*|\bбег\w*|пробеж\w*|кардио\w*"
+    r"|\bйог\w*|растяж\w*|плава\w*|турник\w*|подтягива\w*|штанг\w*|гантел\w*"
+    r"|кроссфит\w*|\bспорт\w*|велосипед\w*|\bлыж\w*|отжима\w*"
+    r"|\bсон\b|\bсна\b|\bспал\w*|\bсплю\b|поспал\w*|выспал\w*|бессонниц\w*"
+    r"|недосып\w*|\bвод[аыуей]\b|\bмл\b|миллилитр\w*|\bлитр\w*|\bвыпил\w*"
+    r"|\bбутылк\w*|\bстакан\w*|настроени\w*|энерги\w*|фокус\w*|тревог\w*"
+    r"|стресс\w*|самочувств\w*|\bустал\w*|апати\w*|радост\w*|груст\w*"
+    r"|\bплан\w*|\bзадач\w*|сделал\w*|сделано\b|перенёс\w*|перенес\w*"
+    r"|дедлайн\w*|\bуспел\w*|\bзакрыл\w*|\bцел(?:ь|и|ью|ей|ям|ях|ями)\b"
+    r"|прогресс\w*|рубеж\w*|продвинул\w*|\bкг\b|\bкм\b|шаг(?:и|ов)?\b"
+    r"|дневник\w*|мысл\w*",
+    re.IGNORECASE | re.UNICODE,
+)
+
+#: Приветствия и болтовня: на них отвечаем тепло и НЕ пишем запись.
+_GREETING_RE = re.compile(
+    r"^(?:привет\w*|приветик|здравствуй\w*|здарова\w*|хай|хи+|hello|hi|hey|ку"
+    r"|добр(?:ое|ый|ого)\s+(?:утро|день|вечер|ночи|время)|доброе\s+утро)\b",
+    re.IGNORECASE | re.UNICODE,
+)
+_THANKS_RE = re.compile(
+    r"^(?:спасибо\w*|благодарю\w*|спс|thanks|thank\s+you|мерси)\b",
+    re.IGNORECASE | re.UNICODE,
+)
+_CHITCHAT_RE = re.compile(
+    r"как\s+(?:ты|дела|сам|сама|жизнь|оно|настроение)|что\s+нового"
+    r"|чем\s+занят",
+    re.IGNORECASE | re.UNICODE,
+)
+_CAPABILITY_RE = re.compile(
+    r"ты\s+кто|кто\s+ты|что\s+ты\s+(?:умеешь|можешь|делаешь)"
+    r"|как\s+тебя\s+зовут|что\s+это\s+за\s+бот",
+    re.IGNORECASE | re.UNICODE,
+)
+#: Просьба поговорить/объяснить — без LLM честно говорим, что не можем.
+_REQUEST_RE = re.compile(
+    r"\bрасскажи\w*|\bобъясни\w*|\bпосоветуй\w*|\bподскажи\w*|\bпоговори\w*"
+    r"|\bпоболтай\w*|\bпошути\w*",
+    re.IGNORECASE | re.UNICODE,
+)
+#: Явный вопрос: начинается с вопросительного слова и кончается «?».
+#: Такой текст не сохраняем, даже если в нём мелькнуло «ел» или «вода».
+_EXPLICIT_QUESTION_RE = re.compile(
+    r"^(?:а\s+)?(?:что|чего|как|какой|какая|какие|когда|почему|зачем|где|куда"
+    r"|кто|сколько|можно|стоит|есть\s+ли)\b",
+    re.IGNORECASE | re.UNICODE,
+)
 
 # Алиасы команд: латиница со слэшем и русские слова без слэша.
 _COMMAND_ALIASES = {
@@ -135,6 +326,10 @@ _COMMAND_ALIASES = {
     "dashboard": "design",
     "stop": "stop",
     "стоп": "stop",
+    "habit": "habit",
+    "привычка": "habit",
+    "habits": "habits",
+    "привычки": "habits",
 }
 
 _NUM_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
@@ -147,12 +342,16 @@ def _text(value) -> str:
 
 
 def _to_float(value) -> float | None:
-    """Достаёт число из метрики: 7, "7.5", "7,5 ч", "2000 мл" → 7.0/7.5/2000."""
+    """Достаёт число из метрики: 7, "7.5", "7,5 ч", "2000 мл", "2 000" → float."""
     if isinstance(value, bool) or value is None:
         return None
     if isinstance(value, (int, float)):
         return float(value)
-    match = _NUM_RE.search(_text(value).replace(" ", ""))
+    text = _text(value)
+    # Любые Unicode-пробелы → обычный: иначе «2 000» (U+2009) даёт 2.0.
+    text = re.sub(r"[\u00a0\u2000-\u200a\u202f\u205f\u3000]", " ", text)
+    text = re.sub(r"(?<=\d) (?=\d{3}(?:\D|$))", "", text)
+    match = _NUM_RE.search(text)
     if not match:
         return None
     try:
@@ -167,6 +366,79 @@ def _fmt_num(value: float | None) -> str:
     if abs(value - round(value)) < 1e-9:
         return str(int(round(value)))
     return ("%.1f" % value).rstrip("0").rstrip(".")
+
+
+def _collapse(text) -> str:
+    """Все пробелы и переводы строк — в один пробел."""
+    return re.sub(r"\s+", " ", _text(text)).strip()
+
+
+def _clip_text(text, limit: int = 120) -> str:
+    """Обрезка текста записи по границе слова с многоточием."""
+    clean = _collapse(text)
+    if len(clean) <= limit:
+        return clean
+    cut = clean[:limit]
+    space = cut.rfind(" ")
+    if space >= limit // 3:
+        cut = cut[:space]
+    cut = cut.rstrip(" ,;:.!?—–-«»\"'")
+    return (cut or clean[:limit].rstrip()) + "…"
+
+
+def _clip_reply(text, limit: int = MAX_REPLY_CHARS) -> str:
+    """Обрезает ответ LLM до ``limit`` символов по границе слова (F2).
+
+    Режет хвост, а не середину: сначала ищет последний пробел (или перевод
+    строки) в пределах лимита, а если его нет — режет жёстко. Многоточие
+    добавляется только когда текст реально обрезан.
+    """
+    clean = _text(text).strip()
+    if len(clean) <= limit:
+        return clean
+    cut = clean[:limit]
+    space = max(cut.rfind("\n"), cut.rfind(" "))
+    if space >= limit // 2:
+        cut = cut[:space]
+    cut = cut.rstrip(" \t\r\n,;:.!?-–—«»\"'")
+    return (cut or clean[:limit].rstrip()) + "…"
+
+
+def _same_start(full: str, title: str) -> bool:
+    """Заголовок уже виден в начале текста — не дублируем его в /today."""
+    def norm(value: str) -> str:
+        return value.lower().replace("ё", "е").strip(" «»\"'`")
+
+    body = norm(_collapse(full))
+    head = norm(_collapse(title))
+    if not body or not head:
+        return False
+    return body.startswith(head) or head.startswith(body)
+
+
+def _minutes_to_hm(minutes: int) -> str:
+    """Минуты от полуночи → ``ЧЧ:ММ`` (для тихих часов в /status)."""
+    try:
+        value = int(minutes) % (24 * 60)
+    except (TypeError, ValueError):
+        return "--:--"
+    return "%02d:%02d" % (value // 60, value % 60)
+
+
+def _plural(number: int, forms: tuple) -> str:
+    """Русское склонение: 1 запись / 2 записи / 5 записей."""
+    try:
+        count = abs(int(number)) % 100
+    except (TypeError, ValueError):
+        return forms[2]
+    if 11 <= count <= 14:
+        return forms[2]
+    count = count % 10
+    if count == 1:
+        return forms[0]
+    if 2 <= count <= 4:
+        return forms[1]
+    return forms[2]
 
 
 class Scheduler:
@@ -279,8 +551,18 @@ class Scheduler:
         raw = self.storage.kv_get(self.SESSION_KEY)
         if not raw:
             return None
+        # F9: огромное значение в kv (мусор, старая версия, чужая запись) не
+        # разбираем и не таскаем через каждое сообщение — просто сбрасываем.
+        raw_text = raw if isinstance(raw, str) else str(raw)
+        if len(raw_text) > MAX_SESSION_BYTES:
+            self.log.warning(
+                "Сессия в kv больше лимита (%d симв. > %d) — сбрасываю",
+                len(raw_text), MAX_SESSION_BYTES,
+            )
+            self.storage.kv_del(self.SESSION_KEY)
+            return None
         try:
-            session = json.loads(raw)
+            session = json.loads(raw_text)
         except (ValueError, TypeError):
             self.log.warning("Битый JSON сессии в kv — сбрасываю")
             self.storage.kv_del(self.SESSION_KEY)
@@ -291,8 +573,29 @@ class Scheduler:
         return session
 
     def _save_session(self, session: dict) -> None:
-        if self.storage is not None:
-            self.storage.kv_set(self.SESSION_KEY, json.dumps(session, ensure_ascii=False))
+        """Сохраняет сессию в kv, не раздувая значение (F9: лимит ~32 КБ).
+
+        Слишком большая (или несериализуемая) сессия сбрасывается с
+        предупреждением в лог: иначе 2 МБ JSON читались бы на каждом сообщении
+        и каждом тике планировщика.
+        """
+        if self.storage is None:
+            return
+        try:
+            raw = json.dumps(session, ensure_ascii=False)
+        except (TypeError, ValueError):
+            self.log.warning("Сессия не сериализуется в JSON — сбрасываю её")
+            self._clear_session()
+            return
+        size = len(raw.encode("utf-8", "replace"))
+        if size > MAX_SESSION_BYTES:
+            self.log.warning(
+                "Сессия занимает %d КБ (лимит %d КБ) — сбрасываю, чтобы не "
+                "раздувать kv", size // 1024, MAX_SESSION_BYTES // 1024,
+            )
+            self._clear_session()
+            return
+        self.storage.kv_set(self.SESSION_KEY, raw)
 
     def _clear_session(self) -> None:
         if self.storage is not None:
@@ -390,6 +693,18 @@ class Scheduler:
                 "Договорились. Напишу в ближайший слот — а если что-то захочется "
                 "записать раньше, просто пиши сюда.",
             )
+            return True
+        # P1-2: вместо кнопок-подсказок человек мог сразу написать по делу —
+        # сохраняем такой текст и знакомство не теряем.
+        if self._free_text_kind(text) == "record":
+            self._mark_onboarded()
+            entry = self._save_answer(chat_id, "free", "", text, now)
+            self._send(
+                chat_id,
+                "Знакомство пропущу — вижу, есть что записать.\n"
+                + self._saved_entry_reply(entry),
+            )
+            self.log.info("Знакомство: первое содержательное сообщение сохранено")
             return True
         self._send(chat_id, "Напиши «да», чтобы начать сейчас, или «вечером» — подожду до вечера.")
         return True
@@ -531,6 +846,7 @@ class Scheduler:
             "last_activity_at": now.isoformat(timespec="seconds"),
             "date": now.date().isoformat(),
             "answered": [],
+            "covered": [],
         }
         # Сначала фиксируем состояние, потом отправляем: крах после отправки
         # не должен приводить к повторному старту в тот же день.
@@ -539,7 +855,13 @@ class Scheduler:
             self.storage.kv_set("last_slot:%s" % slot, now.date().isoformat())
         except Exception:  # noqa: BLE001
             self.log.exception("Не удалось отметить слот %s", slot)
-        text = greeting + ("\n\n" + first if first else "")
+        parts = [greeting]
+        if len(questions) > 1:
+            # P1-4: разрешаем ответить сразу про несколько пунктов.
+            parts.append("Можно ответить сразу на несколько пунктов — я разберусь.")
+        if first:
+            parts.append(first)
+        text = "\n\n".join(parts)
         self.log.info("Старт сессии «%s» (%d вопросов)", slot, len(questions))
         self._send(chat_id, text, slot=slot)
 
@@ -596,6 +918,11 @@ class Scheduler:
             self._clear_session()
             return
         if idle_hours >= self._session_reminder_hours() and not session.get("reminded"):
+            if self.chat_id and self._in_quiet_hours(now):
+                # Тихие часы: не будим. Флаг не ставим — напоминание уйдёт
+                # утром, когда окно закроется (README: «бот сам не пишет»).
+                self.log.info("Напоминание отложено: тихие часы")
+                return
             session["reminded"] = True
             self._save_session(session)
             if self.chat_id:
@@ -713,7 +1040,9 @@ class Scheduler:
         if not self._is_allowed(chat_id):
             return
 
-        text = _text(text)
+        # F8: lone surrogate из «битого» апдейта не должен доходить до SQLite,
+        # vault и тела запроса к LLM — они не кодируются в UTF-8.
+        text = telegram.sanitize_text(_text(text))
         session = self._load_session()
         try:
             self.storage.record_message(
@@ -741,6 +1070,19 @@ class Scheduler:
             ):
                 if self._handle_onboarding_choice(chat_id, stripped, now):
                     return
+
+            # P1-3: первое сообщение без /start — тоже знакомство, а не тишина
+            # и не свободный чат. Иначе человек, написавший «привет», никогда
+            # не онбордился и не получал плановых вопросов.
+            if self._onboarding_required() and not self._is_onboarded():
+                self.storage.kv_set("onboarding_choice", "1")
+                self._send(chat_id, self._onboarding_text())
+                if self._free_text_kind(stripped) == "record":
+                    entry = self._save_answer(chat_id, "free", "", stripped, now)
+                    if entry is not None:
+                        self._send(chat_id, self._saved_entry_reply(entry))
+                self.log.info("Знакомство начато с первого сообщения без /start")
+                return
 
             session = self._load_session()
             if session is not None:
@@ -821,6 +1163,10 @@ class Scheduler:
             self._send(chat_id, self.goals_text())
         elif command == "add_goal":
             self._handle_add_goal(chat_id, args)
+        elif command == "habit":
+            self._handle_habit(chat_id, args, now)
+        elif command == "habits":
+            self._send(chat_id, self.habits_text())
         elif command == "skip":
             session = self._load_session()
             if session is None:
@@ -879,6 +1225,11 @@ class Scheduler:
             "title": title,
             "target": target,
             "current": current,
+            # Стартовая точка = текущее значение на момент создания: прогресс
+            # считается от неё (P0-1), поэтому новая цель «3 из 10» — это 0%,
+            # а не 30% от нуля, которого никогда не было.
+            "start": current,
+            "direction": goals_math.goal_direction({"title": title}),
             "deadline": parts[2] if len(parts) > 2 else "",
             "status": "active",
         }
@@ -900,6 +1251,41 @@ class Scheduler:
         suffix = (" (%s)" % ", ".join(details)) if details else ""
         self._send(chat_id, "🎯 Цель добавлена: %s%s.\nВсе цели — /goals." % (title, suffix))
         self.log.info("Добавлена цель id=%s: %s", goal_id, title)
+
+    def _handle_habit(self, chat_id: int, args: str, now: datetime) -> None:
+        """«/habit зарядка» — отметить привычку за сегодня (P1-6)."""
+        name = _text(args).strip()[:80].strip()
+        if not name:
+            self._send(
+                chat_id,
+                "Чтобы отметить привычку, напиши её название:\n"
+                "/habit зарядка\n"
+                "Список и серии — /habits.",
+            )
+            return
+        day = now.date().isoformat()
+        try:
+            self.storage.touch_habit(name, day)
+        except Exception:  # noqa: BLE001
+            self.log.exception("Не удалось отметить привычку")
+            self._send(chat_id, "Не получилось сохранить привычку — попробуй ещё раз.")
+            return
+        streak = 0
+        try:
+            for habit in self.storage.habits():
+                if _text(habit.get("name")).strip().lower() == name.lower():
+                    streak = int(habit.get("streak") or 0)
+                    break
+        except Exception:  # noqa: BLE001
+            self.log.exception("Не удалось прочитать привычки для подтверждения")
+        # Дашборд читает Storage, поэтому привычка появляется на нём сразу.
+        self._rebuild_dashboard()
+        self._send(
+            chat_id,
+            "✅ Привычка «%s» отмечена. Серия: %d %s.\nСписок — /habits."
+            % (name, streak, _plural(streak, ("день", "дня", "дней"))),
+        )
+        self.log.info("Привычка отмечена: %s (серия %d)", name, streak)
 
     def _start_text(self) -> str:
         name = _text(self.app_cfg.get("name")) or "Life OS"
@@ -931,6 +1317,8 @@ class Scheduler:
             "/report — итоги за 7 дней\n"
             "/goals — цели и прогресс\n"
             "/add_goal Название | 3/10 | срок — добавить цель\n"
+            "/habit зарядка — отметить привычку сегодня\n"
+            "/habits — привычки и серии\n"
             "/skip — пропустить текущий вопрос\n"
             "/pause — пауза (плановые вопросы не приходят)\n"
             "/resume — продолжить\n"
@@ -966,6 +1354,7 @@ class Scheduler:
         if len(answered) < 40:
             answered.append({"question": question[:160], "answer": text[:200]})
         session["answered"] = answered
+        self._remember_topics(session, text)
 
         followup = self._maybe_followup(slot, _text(session.get("question")), text, session)
         if followup:
@@ -982,27 +1371,123 @@ class Scheduler:
 
         self._advance(chat_id, now, session)
 
+    # ---------------------------------------------------- темы и уточнения
+    def _remember_topics(self, session: dict, text: str) -> None:
+        """Запоминает темы, которые человек уже раскрыл (P1-4)."""
+        covered = session.get("covered")
+        if not isinstance(covered, list):
+            covered = []
+        for topic in self._topics_in_text(text):
+            if topic not in covered:
+                covered.append(topic)
+        session["covered"] = covered[:20]
+
+    def _topics_in_text(self, text: str) -> set:
+        """Темы, которые видны в тексте ответа (простая эвристика, без LLM)."""
+        low = _text(text).lower().replace("ё", "е")
+        if not low.strip():
+            return set()
+        topics = set()
+        for topic, pattern in _TOPIC_PATTERNS.items():
+            try:
+                if pattern.search(low):
+                    topics.add(topic)
+            except Exception:  # noqa: BLE001 — regex не должен ронять бота
+                continue
+        return topics
+
+    def _current_topic(self, session: dict) -> str | None:
+        slot = _text(session.get("slot")).strip().lower()
+        topics = _SLOT_TOPICS.get(slot, ())
+        try:
+            idx = int(session.get("idx") or 0)
+        except (TypeError, ValueError):
+            idx = 0
+        if 0 <= idx < len(topics):
+            return topics[idx]
+        return None
+
+    def _topic_is_covered(self, topic: str, covered: set) -> bool:
+        # Пропускаем только конкретные темы, у которых есть человеческая
+        # подпись. «План на день», «итоги недели» и «тело» — составные,
+        # их не пропускаем: легко ошибиться и потерять вопрос.
+        if topic not in _TOPIC_LABELS:
+            return False
+        return topic in covered
+
+    @staticmethod
+    def _join_ru(items: list) -> str:
+        if not items:
+            return ""
+        if len(items) == 1:
+            return items[0]
+        if len(items) == 2:
+            return "%s и %s" % (items[0], items[1])
+        return "%s, %s и %s" % (", ".join(items[:-1]), items[-1])
+
+    def _already_told_text(self, topics: list) -> str:
+        labels = []
+        for topic in topics:
+            label = _TOPIC_LABELS.get(topic)
+            if label and label not in labels:
+                labels.append(label)
+        if not labels:
+            return ""
+        return "Хорошо, про %s ты уже рассказал." % self._join_ru(labels)
+
+    def _answer_needs_followup(self, answer: str) -> bool:
+        """Нужен ли уточняющий вопрос: смотрим на смысл, а не на длину (P1-5)."""
+        low = _text(answer).strip().lower().replace("ё", "е")
+        if not low:
+            return True
+        if low.strip(".!…,;:—-«»\"' ") in _VAGUE_ANSWERS:
+            return True
+        for marker in _VAGUE_MARKERS:
+            if marker in low:
+                return True
+        # Цифры и несколько содержательных слов — значит человек уже рассказал.
+        words = [word for word in _WORD_RE.findall(low) if len(word) > 1]
+        if _DIGIT_RE.search(low):
+            return False
+        if len(words) >= 4:
+            return False
+        if len(words) <= 2:
+            return True
+        # Три слова: уточняем, только если это всё ещё общая оценка.
+        return any(word in _VAGUE_WORDS for word in words)
+
+    def _scripted_followup(self, slot: str, topic: str | None) -> str:
+        if topic and topic in _TOPIC_FOLLOWUPS:
+            return _TOPIC_FOLLOWUPS[topic]
+        return _FOLLOWUP_FALLBACKS.get(slot, "Что именно — хотя бы примерно?")
+
     def _maybe_followup(self, slot: str, question: str, answer: str,
                         session: dict) -> str | None:
-        """Решает, нужен ли уточняющий вопрос (LLM). None — не нужен/не можем."""
-        if not self._llm_available():
-            return None
+        """Решает, нужен ли уточняющий вопрос. None — не нужен/не можем."""
         try:
             followups = int(session.get("followups") or 0)
         except (TypeError, ValueError):
             followups = 0
         if followups >= self.max_followups:
             return None
-        # ТЗ §3.2: уточняем только короткий ответ, иначе идём дальше.
-        if len(answer.strip()) >= 30:
+        if not self._answer_needs_followup(answer):
+            # Развёрнутый/конкретный ответ не переспрашиваем и LLM не зовём.
             return None
+        topic = self._current_topic(session)
+        scripted = self._scripted_followup(slot, topic)
+        if not self._llm_available():
+            # Без LLM уточняем скриптованным вопросом, но только один раз
+            # на вопрос: повторять то же самое человеку неприятно.
+            if _text(session.get("step")) == "followup":
+                return None
+            return scripted
         try:
             messages = prompts.followup_messages(slot, question, answer, self._llm_history())
             reply = self.llm.chat(messages)
         except Exception as exc:  # noqa: BLE001
             self.log.warning("Follow-up через LLM не получился: %s", exc)
-            return None
-        cleaned = _text(reply).strip()
+            return scripted
+        cleaned = _clip_reply(reply)
         if not cleaned or self._followup_is_skip(cleaned):
             return None
         return cleaned
@@ -1025,9 +1510,14 @@ class Scheduler:
 
     def _advance(self, chat_id: int, now: datetime, session: dict,
                  skipped: bool = False) -> None:
-        """Перейти к следующему вопросу или завершить сессию."""
+        """Перейти к следующему вопросу или завершить сессию.
+
+        Вопросы, темы которых человек уже раскрыл в своих ответах, пропускаем
+        без вопроса — с короткой пометкой «уже рассказал» (UX_REVIEW P1-4).
+        """
         slot = _text(session.get("slot")) or "morning"
         questions = self._questions(slot)
+        topics = _SLOT_TOPICS.get(slot, ())
         try:
             idx = int(session.get("idx") or 0) + 1
         except (TypeError, ValueError):
@@ -1035,12 +1525,27 @@ class Scheduler:
         session["followups"] = 0
         session["step"] = "question"
         session["last_activity_at"] = now.isoformat(timespec="seconds")
+        covered = session.get("covered")
+        if not isinstance(covered, list):
+            covered = []
+        covered_set = set(covered)
+        skipped_topics = []
+        while idx < len(questions):
+            topic = topics[idx] if idx < len(topics) else None
+            if topic and self._topic_is_covered(topic, covered_set):
+                if topic not in skipped_topics:
+                    skipped_topics.append(topic)
+                idx += 1
+                continue
+            break
         if idx < len(questions):
             session["idx"] = idx
             session["question"] = questions[idx]
             session["asked"] = questions[idx]
             self._save_session(session)
             prefix = "Хорошо, пропустил.\n\n" if skipped else ""
+            if skipped_topics:
+                prefix += self._already_told_text(skipped_topics) + "\n\n"
             self._send(chat_id, prefix + questions[idx], slot=slot)
             return
 
@@ -1051,6 +1556,16 @@ class Scheduler:
 
     # ==================================================== ДИАЛОГ: СВОБОДНЫЙ
     def _handle_free_text(self, chat_id: int, text: str, now: datetime) -> None:
+        """Свободный чат: болтовня — ответ без записи, рассказ — запись.
+
+        Сначала определяем ``_free_text_kind`` (UX_REVIEW P1-1): LLM и дневник
+        получают только содержательный текст. Иначе «привет» уходил в модель,
+        сохранялся записью и навсегда оставался в /today.
+        """
+        kind = self._free_text_kind(text)
+        if kind != "record":
+            self._send(chat_id, self._free_text_reply(kind), slot="free")
+            return
         reply: str | None = None
         if self._llm_available():
             try:
@@ -1059,25 +1574,171 @@ class Scheduler:
                 reply = self.llm.chat(messages)
             except Exception as exc:  # noqa: BLE001
                 self.log.warning("LLM не ответил в свободном чате: %s", exc)
-        if not _text(reply).strip():
-            reply = self._free_fallback_reply(text)
-        self._send(chat_id, _text(reply).strip(), slot="free")
-        self._save_answer(chat_id, "free", "", text, now)
+        clipped = _clip_reply(reply)
+        if clipped:
+            self._send(chat_id, clipped, slot="free")
+            self._save_answer(chat_id, "free", "", text, now)
+            return
+        # Без LLM содержательный рассказ сохраняем и подтверждаем записью.
+        entry = self._save_answer(chat_id, "free", "", text, now)
+        self._send(chat_id, self._saved_entry_reply(entry), slot="free")
 
-    def _free_fallback_reply(self, text: str) -> str:
-        snippet = text.strip()
-        if len(snippet) > 300:
-            snippet = snippet[:300].rstrip() + "…"
+    def _free_text_reply(self, kind: str) -> str:
+        """Ответ на текст, который не сохраняем в дневник."""
+        if kind == "greeting":
+            return self._greeting_reply()
+        if kind == "thanks":
+            return self._thanks_reply()
+        if kind == "capabilities":
+            return self._capabilities_reply()
+        if kind == "question":
+            return self._question_reply(self._llm_available())
+        return self._chatter_reply()
+
+    def _free_text_kind(self, text: str) -> str:
+        """Что это за свободный текст: record / greeting / thanks / … / question.
+
+        Простая эвристика без LLM: сначала отсекаем явные вопросы и болтовню,
+        а содержательный рассказ о жизни сохраняем (UX_REVIEW P1-6).
+        """
+        clean = _text(text).strip()
+        low = clean.lower().replace("ё", "е")
+        if not low:
+            return "chatter"
+        # «ок», «понял», «норм» — подтверждение, а не заметка (P2).
+        if _is_ack_only(low):
+            return "chatter"
+        is_question = clean.rstrip("… .!").endswith("?")
+        explicit = bool(is_question and _EXPLICIT_QUESTION_RE.search(low))
+        if explicit:
+            if _CAPABILITY_RE.search(low):
+                return "capabilities"
+            if _CHITCHAT_RE.search(low):
+                return "chatter"
+            return "question"
+        is_record = bool(_LIFE_SIGNAL_RE.search(low))
+        if not is_record:
+            try:
+                is_record = bool(parsing.heuristic_metrics(clean))
+            except Exception:  # noqa: BLE001 — метрики не должны ронять чат
+                is_record = False
+        if is_record:
+            return "record"
+        if _THANKS_RE.search(low):
+            return "thanks"
+        if _CAPABILITY_RE.search(low):
+            return "capabilities"
+        if _GREETING_RE.search(low):
+            return "greeting"
+        if _CHITCHAT_RE.search(low):
+            return "chatter"
+        if _REQUEST_RE.search(low) or is_question:
+            return "question"
+        return "record"
+
+    def _greeting_reply(self) -> str:
         return (
-            "Записал: «%s». Если хочешь, расскажи подробнее — сохраню всё в дневник."
-            % snippet
+            "Привет! У меня всё ровно, я на связи. Расскажи, что хочется "
+            "записать, — сохраню в дневник. Или /help: покажу, что умею."
         )
+
+    def _thanks_reply(self) -> str:
+        return "Пожалуйста! Если захочешь что-то записать — просто напиши."
+
+    def _capabilities_reply(self) -> str:
+        return (
+            "Я дневник-собеседник: спрашиваю про день и складываю ответы "
+            "в Obsidian. Записать можно просто текстом. Посмотреть — /today, "
+            "/report, /goals; всё остальное — /help."
+        )
+
+    def _chatter_reply(self) -> str:
+        return (
+            "Я рядом. Если есть что записать — еда, сон, тренировка, задачи, "
+            "мысли — просто напиши."
+        )
+
+    def _question_reply(self, llm_available: bool = False) -> str:
+        if llm_available:
+            # LLM включён, но вопросы в свободном чате не сохраняем и не
+            # отправляем в модель — честно говорим, что умеем.
+            return (
+                "На вопросы развёрнуто не отвечаю — я дневник-собеседник: "
+                "записываю и показываю твой день. Еда, сон, тренировки, "
+                "задачи, мысли — просто напиши. Команды — /help."
+            )
+        return (
+            "Сейчас я без языковой модели, поэтому развёрнуто ответить не смогу. "
+            "А записать в дневник могу: еда, сон, тренировка, задачи, мысли — "
+            "просто напиши. Команды — /help."
+        )
+
+    def _metrics_snippet(self, metrics: dict, category: str = "") -> str:
+        """Короткая человеческая выжимка по метрикам записи."""
+        if not isinstance(metrics, dict):
+            return ""
+        category = _text(category).strip().lower()
+        parts = []
+        training_type = _text(metrics.get("training_type")).strip()
+        if training_type:
+            parts.append(training_type)
+        duration = _to_float(metrics.get("duration_min"))
+        if duration:
+            parts.append("%s мин" % _fmt_num(duration))
+        sleep = _to_float(metrics.get("sleep_h"))
+        if sleep:
+            parts.append(("%s ч" if category == "sleep" else "сон %s ч")
+                         % _fmt_num(sleep))
+        water = _to_float(metrics.get("water_ml"))
+        if water:
+            parts.append(("%s мл" if category == "water" else "вода %s мл")
+                         % _fmt_num(water))
+        calories = _to_float(metrics.get("calories"))
+        if calories:
+            parts.append("~%s ккал" % _fmt_num(calories))
+        protein = _to_float(metrics.get("protein_g"))
+        if protein:
+            parts.append("%s г белка" % _fmt_num(protein))
+        for key, label in (("mood", "настроение"), ("energy", "энергия"),
+                           ("focus", "фокус")):
+            value = _to_float(metrics.get(key))
+            if value:
+                if category == key:
+                    parts.append("%s/5" % _fmt_num(value))
+                else:
+                    parts.append("%s %s/5" % (label, _fmt_num(value)))
+                break
+        done = metrics.get("tasks_done")
+        if isinstance(done, list) and done:
+            parts.append("задач: %d" % len(done))
+        return ", ".join(parts[:3])
+
+    def _saved_entry_reply(self, entry: dict | None) -> str:
+        """Подтверждение записи: что именно записали, без канцелярита."""
+        if not isinstance(entry, dict):
+            return (
+                "Хотел сохранить, но запись не удалась. Попробуй ещё раз — "
+                "или /status покажет состояние."
+            )
+        category = _text(entry.get("category")) or "other"
+        snippet = self._metrics_snippet(entry.get("metrics") or {}, category)
+        if category == "other":
+            return "Записал как заметку. /today покажет день целиком."
+        label = self._category_label(category)
+        if snippet:
+            return "Записал: %s (%s). /today покажет день целиком." % (label, snippet)
+        return "Записал: %s. /today покажет день целиком." % label
 
     # ========================================================= СОХРАНЕНИЕ
     def _save_answer(self, chat_id: int, slot: str, question: str,
-                     answer: str, now: datetime) -> int | None:
-        """Ответ → entry (parsing) → SQLite → Obsidian → дашборд."""
+                     answer: str, now: datetime) -> dict | None:
+        """Ответ → entry (parsing) → SQLite → Obsidian → дашборд.
+
+        Возвращает сохранённую запись (dict с id) или None, если сохранить
+        не удалось: по ней же строим подтверждение в свободном чате.
+        """
         now_iso = now.isoformat(timespec="seconds")
+        answer = telegram.sanitize_text(answer)  # F8: без lone surrogate
         entry: dict | None = None
         try:
             entry = parsing.parse_answer(self.llm, slot, question, answer, now_iso)
@@ -1110,7 +1771,7 @@ class Scheduler:
                 self.log.exception("Не удалось отметить запись written=1")
         self._write_mirror_safe()
         self._rebuild_dashboard()
-        return int(entry_id)
+        return entry
 
     def _write_to_vault(self, entry: dict) -> bool:
         if self.vault is None:
@@ -1165,20 +1826,51 @@ class Scheduler:
         except Exception:  # noqa: BLE001
             return False
 
-    def _llm_history(self, limit: int = 10) -> list[dict]:
-        """История диалога в формате OpenAI chat messages."""
+    def _llm_history(self, limit: int = 10,
+                     max_chars: int = MAX_HISTORY_CHARS) -> list[dict]:
+        """История диалога в формате OpenAI chat messages.
+
+        Бюджет ``max_chars`` символов (F2 адверсариального теста): сообщения
+        набираются от новых к старым, старые отбрасываются целиком. Самое
+        свежее сообщение (текущая реплика человека) посередине не режется:
+        если оно одно длиннее бюджета, остаётся его начало.
+
+        Args:
+            limit: сколько последних сообщений вообще запрашивать из БД.
+            max_chars: максимальная суммарная длина истории в символах.
+
+        Returns:
+            Список сообщений в хронологическом порядке (старые → новые).
+        """
         try:
             rows = self.storage.chat_history(limit)
         except Exception:  # noqa: BLE001
             return []
-        messages: list[dict] = []
+        prepared: list[tuple[str, str]] = []
         for row in rows:
             content = _text(row.get("text")).strip()
             if not content:
                 continue
             role = "user" if _text(row.get("direction")) == "in" else "assistant"
-            messages.append({"role": role, "content": content})
-        return messages
+            prepared.append((role, content))
+
+        selected: list[tuple[str, str]] = []
+        used = 0
+        for role, content in reversed(prepared):
+            size = len(content)
+            if selected:
+                if used + size > max_chars:
+                    break
+            elif size > max_chars:
+                # Текущее (самое свежее) сообщение длиннее бюджета: режем хвост,
+                # а не середину, и не выбрасываем его целиком. Многоточие входит
+                # в бюджет, поэтому итог никогда не длиннее max_chars.
+                content = content[: max(1, max_chars - 1)].rstrip() + "…"
+                size = len(content)
+            selected.append((role, content))
+            used += size
+        return [{"role": role, "content": content}
+                for role, content in reversed(selected)]
 
     # ================================================================ ТЕКСТЫ
     def status_text(self) -> str:
@@ -1190,6 +1882,17 @@ class Scheduler:
         lines = ["📊 Life OS — статус", ""]
         lines.append("Состояние: %s" % ("⏸ на паузе (вернуться: /resume)" if paused else "✅ работает"))
         lines.append("Время: %s, %s" % (self._today_human(now.date()), now.strftime("%H:%M")))
+
+        # Тихие часы: ночью бот молчит, и /status должен это показывать, а не
+        # делать вид, что слоты просто «ждут» (UX_REVIEW, P2).
+        window = self._quiet_window()
+        if window is not None:
+            start_hm = _minutes_to_hm(window[0])
+            end_hm = _minutes_to_hm(window[1])
+            if self._in_quiet_hours(now):
+                lines.append("Тихие часы до %s — вопросов не будет, писать можно." % end_hm)
+            else:
+                lines.append("Тихие часы %s–%s" % (start_hm, end_hm))
 
         slot_parts = []
         for slot in ("morning", "midday", "evening"):
@@ -1293,17 +1996,35 @@ class Scheduler:
         for slot in order:
             lines.append(self._slot_title(slot))
             for entry in grouped[slot]:
-                title = _text(entry.get("title")) or self._short_title(_text(entry.get("text")))
-                category = _text(entry.get("category"))
-                suffix = " · %s" % self._category_label(category) if category else ""
-                lines.append("• %s — %s%s" % (self._entry_time(entry), title, suffix))
+                lines.append(self._today_entry_line(entry))
             lines.append("")
 
         totals = self._today_totals(entries)
         if totals:
             lines.append(totals)
-        lines.append("Итого: %d записей." % len(entries))
+        lines.append(
+            "Итого: %d %s." % (len(entries), _plural(len(entries),
+                                                     ("запись", "записи", "записей")))
+        )
         return "\n".join(lines).strip()
+
+    def _today_entry_line(self, entry: dict) -> str:
+        """/today: показываем текст записи (~120 символов), а не заголовок.
+
+        Заголовок добавляем только если он не совпадает с началом текста —
+        иначе он просто дублировал бы первую строку (UX_REVIEW P1-8).
+        """
+        title = _text(entry.get("title")).strip()
+        full = _text(entry.get("text"))
+        category = _text(entry.get("category")).strip()
+        suffix = " · %s" % self._category_label(category) if category else ""
+        if full.strip() and title and not _same_start(full, title):
+            head = title.rstrip(" :—-")
+            room = max(40, 120 - len(head) - 2)
+            content = "%s: %s" % (head, _clip_text(full, room))
+        else:
+            content = _clip_text(full, 120) or title or "без текста"
+        return "• %s — %s%s" % (self._entry_time(entry), content, suffix)
 
     def _slot_title(self, slot: str) -> str:
         if slot in _SLOT_TITLES:
@@ -1350,10 +2071,14 @@ class Scheduler:
 
         sleep = self._metric_values(entries, "sleep_h")
         if sleep:
-            lines.append("Сон: в среднем %s ч (%d записей)" % (_fmt_num(sum(sleep) / len(sleep)), len(sleep)))
+            lines.append("Сон: в среднем %s ч (%d %s)"
+                         % (_fmt_num(sum(sleep) / len(sleep)), len(sleep),
+                            _plural(len(sleep), ("запись", "записи", "записей"))))
         waters = self._metric_values(entries, "water_ml")
         if waters:
-            lines.append("Вода: в среднем %s мл на запись (%d записей)" % (_fmt_num(sum(waters) / len(waters)), len(waters)))
+            lines.append("Вода: в среднем %s мл на запись (%d %s)"
+                         % (_fmt_num(sum(waters) / len(waters)), len(waters),
+                            _plural(len(waters), ("запись", "записи", "записей"))))
         moods = self._metric_values(entries, "mood")
         if moods:
             lines.append("Настроение: %s из 5" % _fmt_num(sum(moods) / len(moods)))
@@ -1409,8 +2134,9 @@ class Scheduler:
         if not goals:
             return (
                 "🎯 Цели\n\nЦелей пока нет. Добавить можно так:\n"
-                "/add_goal Читать 12 книг | 4 | 2027-01-01\n"
-                "Формат: Название | сколько уже | срок (всё, кроме названия, опционально)."
+                "/add_goal Читать 12 книг | 4/12 | 2027-01-01\n"
+                "Формат: Название | сколько уже / сколько всего | срок "
+                "(всё, кроме названия, опционально)."
             )
         lines = ["🎯 Цели (%d)" % len(goals), ""]
         for number, goal in enumerate(goals, 1):
@@ -1418,11 +2144,12 @@ class Scheduler:
             bits = []
             progress = self._goal_progress(goal)
             if progress is not None:
+                # Тот же процент, что на дашборде и в «Цели.md» (P0-1).
                 bits.append("%d%%" % progress)
-                target = _to_float(goal.get("target"))
-                current = _to_float(goal.get("current"))
-                if target is not None and current is not None and target > 0:
-                    bits.append("%s из %s" % (_fmt_num(current), _fmt_num(target)))
+            target = _to_float(goal.get("target"))
+            current = _to_float(goal.get("current"))
+            if target is not None and current is not None and target > 0:
+                bits.append("%s из %s" % (_fmt_num(current), _fmt_num(target)))
             else:
                 target_text = _text(goal.get("target")).strip()
                 if target_text:
@@ -1435,6 +2162,38 @@ class Scheduler:
             lines.append("%d. %s — %s" % (number, title, " · ".join(bits)))
         lines.append("")
         lines.append("Добавить: /add_goal Название | прогресс | срок")
+        return "\n".join(lines)
+
+    def habits_text(self) -> str:
+        """«/habits» — привычки с серией (P1-6)."""
+        try:
+            habits = self.storage.habits()
+        except Exception:  # noqa: BLE001
+            self.log.exception("habits: не удалось прочитать привычки")
+            habits = []
+        if not habits:
+            return (
+                "💪 Привычки\n\nПока ни одной. Отмечай так:\n"
+                "/habit зарядка — отметить сегодня\n"
+                "Потом /habits покажет серию."
+            )
+        today = datetime.now(self.tz).date().isoformat()
+        lines = ["💪 Привычки (%d)" % len(habits), ""]
+        for habit in habits:
+            name = _text(habit.get("name")).strip() or "без названия"
+            try:
+                streak = int(habit.get("streak") or 0)
+            except (TypeError, ValueError):
+                streak = 0
+            bits = ["серия %d %s" % (streak, _plural(streak, ("день", "дня", "дней")))]
+            last_done = _text(habit.get("last_done")).strip()
+            if last_done == today:
+                bits.append("сегодня ✅")
+            elif last_done:
+                bits.append("последний раз %s" % last_done)
+            lines.append("• %s — %s" % (name, ", ".join(bits)))
+        lines.append("")
+        lines.append("Отметить сегодня: /habit название")
         return "\n".join(lines)
 
     # -------------------------------------------------------- метрики/цели
@@ -1453,17 +2212,16 @@ class Scheduler:
         return values
 
     def _goal_progress(self, goal: dict) -> int | None:
-        target = _to_float(goal.get("target"))
-        current = _to_float(goal.get("current"))
-        if target is not None and target > 0 and current is not None:
-            percent = int(round(current / target * 100.0))
-            return max(0, min(100, percent))
-        # Иногда прогресс пишут прямо в note/current: "60%".
-        for field in ("current", "note", "target"):
-            match = re.search(r"(\d{1,3})\s*%", _text(goal.get(field)))
-            if match:
-                return max(0, min(100, int(match.group(1))))
-        return None
+        """Прогресс цели 0..100 из единого расчёта :mod:`src.goals_math`.
+
+        Раньше здесь было ``current / target`` без направления и старта:
+        «вес 92 → 78» показывал 94%, а дашборд — 0% (UX_REVIEW, P0-1).
+        ``None`` — только если у цели ещё нет чисел/процентов.
+        """
+        percent = goals_math.goal_percent(goal)
+        if percent is None:
+            return None
+        return max(0, min(100, int(percent)))
 
     def _entry_time(self, entry: dict) -> str:
         ts = _text(entry.get("ts"))

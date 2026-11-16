@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from datetime import timedelta
 from pathlib import Path
+from unittest import mock
 
 import _support
 from src import prompts
@@ -269,6 +270,24 @@ class SessionFlowTestCase(SchedulerTestBase):
         self.scheduler.tick(_support.at(2026, 11, 16, 13, 0))
         self.assertEqual(len(self.tg.texts()), count, "напоминание только раз")
 
+    def test_reminder_postponed_in_quiet_hours(self) -> None:
+        """Тихие часы: напоминание о зависшей сессии не будит (README)."""
+        scheduler = self.make_scheduler(app__quiet_hours=["23:00", "08:00"])
+        self.scheduler = scheduler
+        scheduler.tick(_support.at(2026, 11, 16, 14, 0))  # дневной слот
+        self.assertIsNotNone(self.storage.kv_get("session"))
+        count = len(self.tg.texts())
+        scheduler.tick(_support.at(2026, 11, 16, 23, 30))  # 9,5 ч простоя, тихие часы
+        self.assertEqual(len(self.tg.texts()), count, "в тихие часы напоминаний нет")
+        session = json.loads(self.storage.kv_get("session"))
+        self.assertIsNotNone(session, "TTL ещё не истёк — сессия жива")
+        self.assertFalse(session.get("reminded"), "напоминание не считается отправленным")
+        scheduler.tick(_support.at(2026, 11, 17, 8, 35))  # утро: слот стартует
+        self.assertTrue(
+            any("Доброе утро" in t or "план" in t.lower() for t in self.tg.texts()),
+            "утром должен начаться утренний слот",
+        )
+
     def test_session_ttl_clears_stale(self) -> None:
         self.start_morning()
         self.scheduler.tick(_support.at(2026, 11, 16, 21, 30))  # 13 часов простоя
@@ -320,9 +339,13 @@ class CommandsTestCase(SchedulerTestBase):
         self.assertEqual(goals[0]["title"], "Пробежать 10 км")
         self.assertEqual(goals[0]["current"], "3")
         self.assertEqual(goals[0]["target"], "10")
+        # P0-1: стартовая точка — текущее значение на момент создания цели,
+        # направление определяется по названию; прогресс считается от старта.
+        self.assertEqual(goals[0]["start"], "3")
+        self.assertEqual(goals[0]["direction"], "up")
         self.assertEqual(self.vault.rewrite_goals_calls, 1)
         self.scheduler.on_message(CHAT, "/goals", _support.at(2026, 11, 16, 9, 2))
-        self.assertIn("30%", self.tg.last())
+        self.assertIn("0%", self.tg.last(), "новая цель начинается с 0%")
         self.assertIn("Пробежать 10 км", self.tg.last())
 
     def test_pause_and_resume(self) -> None:
@@ -362,6 +385,16 @@ class CommandsTestCase(SchedulerTestBase):
         self.assertIn("Life OS", self.tg.last())
         self.assertIn("/today", self.tg.last())
 
+    def test_start_during_active_session_keeps_session(self) -> None:
+        self.start_morning()
+        session_before = json.loads(self.storage.kv_get("session"))
+        self.scheduler.on_message(CHAT, "/start", _support.at(2026, 11, 16, 8, 35))
+        self.assertIn("середине вопросов", self.tg.last())
+        self.assertEqual(
+            json.loads(self.storage.kv_get("session")), session_before,
+            "/start не должен сбрасывать текущую сессию",
+        )
+
 
 class FreeChatAndAccessTestCase(SchedulerTestBase):
     def test_free_text_without_llm(self) -> None:
@@ -377,10 +410,19 @@ class FreeChatAndAccessTestCase(SchedulerTestBase):
     def test_free_text_with_llm_reply(self) -> None:
         self.llm = _support.FakeLLM(available=True, chat_reply="Понял, записал.")
         self.scheduler.llm = self.llm
-        self.scheduler.on_message(CHAT, "Привет! Как дела?",
+        # P1-1: LLM получает только содержательный текст, а «привет» — нет.
+        self.scheduler.on_message(CHAT, "Съел суп и выпил кофе",
                                   _support.at(2026, 11, 16, 12, 0))
         self.assertEqual(self.tg.last(), "Понял, записал.")
         self.assertEqual(len(self.all_entries()), 1)
+
+    def test_llm_is_not_called_for_greeting(self) -> None:
+        self.llm = _support.FakeLLM(available=True, chat_reply="Понял, записал.")
+        self.scheduler.llm = self.llm
+        self.scheduler.on_message(CHAT, "привет", _support.at(2026, 11, 16, 12, 0))
+        self.assertEqual(self.all_entries(), [], "приветствие не пишется в дневник")
+        self.assertNotEqual(self.tg.last(), "Понял, записал.")
+        self.assertEqual(self.llm.chat_calls, 0, "LLM на «привет» не вызывается")
 
     def test_foreign_chat_ignored(self) -> None:
         self.scheduler.on_message(999, "чужой", _support.at(2026, 11, 16, 12, 0))
@@ -438,6 +480,407 @@ class FreeChatAndAccessTestCase(SchedulerTestBase):
         )
         self.scheduler.tick(_support.at(2026, 11, 17, 7, 0))
         self.assertGreater(self.vault.sync_calls, calls_after_first[0])
+
+
+class FreeTextIntentTestCase(SchedulerTestBase):
+    """Свободный текст без LLM: болтовня не пишется в дневник, рассказ — пишется.
+
+    UX_REVIEW P1-6: «привет» и «спасибо» не должны превращаться в записи
+    «Записал: „Привет!“», а содержательный текст — сохраняться с категорией.
+    """
+
+    def test_greeting_is_not_saved_as_entry(self) -> None:
+        self.scheduler.on_message(CHAT, "привет", _support.at(2026, 11, 16, 12, 0))
+        reply = self.tg.last()
+        self.assertEqual(self.all_entries(), [], "приветствие — не запись дневника")
+        self.assertNotIn("Записал", reply)
+        self.assertIn("Привет", reply)
+        self.assertIn("/help", reply)
+
+    def test_thanks_is_not_saved_as_entry(self) -> None:
+        self.scheduler.on_message(CHAT, "спасибо", _support.at(2026, 11, 16, 12, 0))
+        reply = self.tg.last()
+        self.assertEqual(self.all_entries(), [], "«спасибо» — не запись дневника")
+        self.assertNotIn("Записал", reply)
+        self.assertIn("Пожалуйста", reply)
+
+    def test_meaningful_text_is_saved_with_category_confirmation(self) -> None:
+        self.scheduler.on_message(
+            CHAT, "съел рис с курицей, 500 мл воды", _support.at(2026, 11, 16, 12, 0)
+        )
+        reply = self.tg.last()
+        entries = self.all_entries()
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["slot"], "free")
+        self.assertEqual(entries[0]["category"], "food")
+        self.assertEqual(entries[0]["metrics"].get("water_ml"), 500)
+        self.assertIn("Записал", reply)
+        self.assertIn("еда", reply.lower(), "в подтверждении — категория записи")
+
+
+class TodayPresentationTestCase(SchedulerTestBase):
+    """/today: текст записи, а не только заголовок; склонение «запись/записи»."""
+
+    @staticmethod
+    def _now():
+        from datetime import datetime
+
+        return datetime.now(_support.MSK).replace(
+            hour=12, minute=0, second=0, microsecond=0
+        )
+
+    @classmethod
+    def _today(cls) -> str:
+        from datetime import datetime
+
+        return datetime.now(_support.MSK).date().isoformat()
+
+    def _add(self, **entry) -> int:
+        today = self._today()
+        base = {
+            "date": today,
+            "ts": today + "T12:00:00+03:00",
+            "slot": "free",
+            "category": "other",
+        }
+        base.update(entry)
+        return self.storage.add_entry(base)
+
+    def test_today_shows_entry_text_not_only_title(self) -> None:
+        self._add(
+            title="Обед", category="food",
+            text="Обед — рис с курицей и салат",
+        )
+        text = self.scheduler.today_text()
+        self.assertIn("рис с курицей и салат", text,
+                      "/today должен показывать текст записи, а не только заголовок")
+        self.assertIn("1 запись", text)
+
+    def test_today_shows_full_free_text_entry(self) -> None:
+        self.scheduler.on_message(
+            CHAT, "Обед — рис с курицей и салат", self._now()
+        )
+        text = self.scheduler.today_text()
+        self.assertIn("Обед — рис с курицей и салат", text)
+        # заголовок совпадает с началом текста — не дублируем его в строке
+        self.assertEqual(text.count("Обед — рис с курицей и салат"), 1)
+
+    def test_today_plural_forms(self) -> None:
+        self._add(title="Обед", text="Обед — рис с курицей и салат")
+        self.assertIn("Итого: 1 запись.", self.scheduler.today_text())
+        self._add(
+            ts=self._today() + "T13:00:00+03:00",
+            title="Вода", text="Выпил 500 мл воды",
+        )
+        text = self.scheduler.today_text()
+        self.assertIn("Итого: 2 записи.", text)
+        self.assertNotIn("2 записей", text)
+
+
+class FollowupByMeaningTestCase(SchedulerTestBase):
+    """Уточнение по смыслу, а не по длине ответа (UX_REVIEW P1-5)."""
+
+    def start_quiet_morning(self) -> None:
+        self.scheduler.tick(_support.at(2026, 11, 16, 8, 30))
+        self.tg.clear()
+
+    def test_short_detailed_answer_has_no_second_question(self) -> None:
+        questions = prompts.scripted_questions("morning")
+        self.start_quiet_morning()
+        self.scheduler.on_message(
+            CHAT, "зал, 60 минут, тяжело", _support.at(2026, 11, 16, 8, 31)
+        )
+        self.assertEqual(
+            self.tg.last(), questions[1],
+            "короткий, но подробный ответ не должен вызывать уточнение",
+        )
+        session = json.loads(self.storage.kv_get("session"))
+        self.assertEqual(session["step"], "question")
+        self.assertEqual(session["followups"], 0)
+
+    def test_vague_answer_gets_exactly_one_clarification(self) -> None:
+        questions = prompts.scripted_questions("morning")
+        self.start_quiet_morning()
+        self.scheduler.on_message(CHAT, "норм", _support.at(2026, 11, 16, 8, 31))
+        first = self.tg.last()
+        session = json.loads(self.storage.kv_get("session"))
+        self.assertEqual(session["step"], "followup", "на «норм» — один уточняющий вопрос")
+        self.assertEqual(session["followups"], 1)
+        self.assertNotEqual(first, questions[0], "не повторяем исходный вопрос")
+        self.assertTrue(first.endswith("?"), "уточнение — ровно один вопрос")
+
+        # ответ на уточнение: сессия идёт дальше, второго вопроса-уточнения нет
+        self.tg.clear()
+        self.scheduler.on_message(CHAT, "норм", _support.at(2026, 11, 16, 8, 32))
+        self.assertEqual(self.tg.last(), questions[1])
+        session = json.loads(self.storage.kv_get("session"))
+        self.assertEqual(session["step"], "question")
+        self.assertEqual(session["followups"], 0)
+
+
+class MultiAnswerTestCase(SchedulerTestBase):
+    """Ответ сразу на несколько тем не переспрашивает уже рассказанное (P1-4)."""
+
+    def test_multiple_topics_skip_covered_questions(self) -> None:
+        questions = prompts.scripted_questions("midday")
+        self.scheduler.tick(_support.at(2026, 11, 16, 14, 0))
+        self.tg.clear()
+        self.scheduler.on_message(
+            CHAT, "ел рис, выпил 500 мл, тренировка была",
+            _support.at(2026, 11, 16, 14, 1),
+        )
+        reply = self.tg.last()
+        self.assertNotIn("Сколько воды", reply,
+                         "про воду уже рассказал — не переспрашиваем")
+        self.assertIn(questions[2], reply,
+                      "вопрос переключился на следующую непокрытую тему")
+        self.assertIn("про воду", reply)
+        session = json.loads(self.storage.kv_get("session"))
+        self.assertEqual(session["idx"], 2)
+        self.assertEqual(session["step"], "question")
+
+
+class OnboardingTestCase(SchedulerTestBase):
+    """Знакомство (app.onboarding=true): вопросы не приходят до /start и выбора."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.scheduler = self.make_scheduler(app__onboarding=True)
+
+    def intro(self) -> None:
+        self.scheduler.on_message(CHAT, "/start", _support.at(2026, 11, 16, 9, 0))
+
+    def test_tick_does_not_start_slot_before_start(self) -> None:
+        self.scheduler.tick(_support.at(2026, 11, 16, 8, 30))
+        self.assertEqual(self.tg.texts(), [], "до знакомства бот молчит")
+        self.assertIsNone(self.storage.kv_get("session"))
+        self.assertIsNone(self.storage.kv_get("last_slot:morning"))
+        self.assertIsNone(self.storage.kv_get("onboarded"))
+
+    def test_start_sends_intro_and_does_not_start_session(self) -> None:
+        self.intro()
+        text = self.tg.last()
+        self.assertIn("дневник-собеседник", text)
+        self.assertIn("Начать сейчас", text)
+        self.assertIn("вечером", text)
+        self.assertIsNone(self.storage.kv_get("session"), "знакомство — ещё не сессия")
+        self.assertIsNone(self.storage.kv_get("onboarded"))
+
+    def test_da_starts_current_slot_and_marks_onboarded(self) -> None:
+        self.intro()
+        self.scheduler.on_message(CHAT, "да", _support.at(2026, 11, 16, 9, 1))
+        raw = self.storage.kv_get("session")
+        self.assertIsNotNone(raw, "«да» должен начать сессию текущего слота")
+        session = json.loads(raw)
+        self.assertEqual(session["slot"], "morning", "в 9:00 текущий слот — утренний")
+        self.assertEqual(session["step"], "question")
+        self.assertEqual(session["date"], "2026-11-16")
+        self.assertEqual(self.storage.kv_get("onboarded"), "1")
+        self.assertIn(prompts.scripted_questions("morning")[0], self.tg.last())
+
+    def test_vecher_om_defers_session_and_keeps_flag(self) -> None:
+        self.intro()
+        self.scheduler.on_message(CHAT, "вечером", _support.at(2026, 11, 16, 9, 1))
+        self.assertIn("Договорились", self.tg.last())
+        self.assertIsNone(self.storage.kv_get("session"), "«вечером» не начинает сессию")
+        self.assertEqual(self.storage.kv_get("onboarded"), "1")
+        # флаг снимает блокировку: плановый слот стартует сам
+        self.scheduler.tick(_support.at(2026, 11, 16, 14, 0))
+        session = json.loads(self.storage.kv_get("session"))
+        self.assertEqual(session["slot"], "midday")
+
+    def test_onboarding_reply_is_not_saved_as_entry(self) -> None:
+        self.intro()
+        self.scheduler.on_message(CHAT, "да", _support.at(2026, 11, 16, 9, 1))
+        self.assertEqual(self.all_entries(), [], "выбор знакомства — не запись дневника")
+
+
+class QuietHoursTestCase(SchedulerTestBase):
+    """Тихие часы app.quiet_hours=["23:00","08:00"] — ночью не будим."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.scheduler = self.make_scheduler(app__quiet_hours=["23:00", "08:00"])
+
+    def test_tick_at_night_does_not_start_slot(self) -> None:
+        self.scheduler.tick(_support.at(2026, 11, 16, 23, 30))
+        self.assertEqual(self.tg.texts(), [], "в тихие часы бот не пишет")
+        self.assertIsNone(self.storage.kv_get("session"))
+        self.assertIsNone(self.storage.kv_get("last_slot:evening"))
+        self.assertIsNone(self.storage.kv_get("evening_ping:2026-11-16"),
+                          "мягкий пинг ночью тоже не нужен")
+
+    def test_tick_after_quiet_window_starts_slot(self) -> None:
+        self.scheduler.tick(_support.at(2026, 11, 16, 23, 30))
+        self.assertIsNone(self.storage.kv_get("session"))
+        self.scheduler.tick(_support.at(2026, 11, 17, 9, 0))
+        session = json.loads(self.storage.kv_get("session"))
+        self.assertEqual(session["slot"], "morning", "после 08:00 слоты снова работают")
+        self.assertEqual(session["date"], "2026-11-17")
+
+    def test_da_at_night_is_declined(self) -> None:
+        scheduler = self.make_scheduler(
+            app__onboarding=True, app__quiet_hours=["23:00", "08:00"],
+        )
+        scheduler.on_message(CHAT, "/start", _support.at(2026, 11, 16, 22, 0))
+        scheduler.on_message(CHAT, "да", _support.at(2026, 11, 16, 23, 30))
+        self.assertIn("Поздно уже", self.tg.last())
+        self.assertIsNone(self.storage.kv_get("session"), "ночью сессию не начинаем")
+        self.assertEqual(self.storage.kv_get("onboarded"), "1")
+
+
+
+class HabitCommandsTestCase(SchedulerTestBase):
+    """P1-6: привычки оживают — /habit отмечает, /habits показывает серию."""
+
+    def test_habit_marks_today_and_shows_streak(self) -> None:
+        before = self.dash.calls
+        self.scheduler.on_message(CHAT, "/habit зарядка",
+                                  _support.at(2026, 11, 16, 9, 0))
+        self.assertIn("Привычка «зарядка» отмечена", self.tg.last())
+        self.assertIn("Серия: 1 день", self.tg.last())
+        habits = self.storage.habits()
+        self.assertEqual(len(habits), 1)
+        self.assertEqual(habits[0]["name"], "зарядка")
+        self.assertEqual(habits[0]["streak"], 1)
+        self.assertEqual(habits[0]["last_done"], "2026-11-16")
+        self.assertGreater(self.dash.calls, before,
+                           "дашборд пересобран — привычка появится без ручных действий")
+
+    def test_habit_second_day_grows_streak(self) -> None:
+        self.scheduler.on_message(CHAT, "/habit зарядка",
+                                  _support.at(2026, 11, 16, 9, 0))
+        self.scheduler.on_message(CHAT, "/habit зарядка",
+                                  _support.at(2026, 11, 17, 9, 0))
+        self.assertIn("Серия: 2 дня", self.tg.last())
+        self.assertEqual(self.storage.habits()[0]["streak"], 2)
+
+    def test_habits_list_with_streak(self) -> None:
+        self.scheduler.on_message(CHAT, "/habit зарядка",
+                                  _support.at(2026, 11, 16, 9, 0))
+        self.scheduler.on_message(CHAT, "/habits", _support.at(2026, 11, 16, 9, 1))
+        text = self.tg.last()
+        self.assertIn("Привычки (1)", text)
+        self.assertIn("зарядка", text)
+        self.assertIn("серия 1 день", text)
+        self.assertIn("сегодня ✅", text)
+
+    def test_habits_empty_state(self) -> None:
+        self.scheduler.on_message(CHAT, "/habits", _support.at(2026, 11, 16, 9, 0))
+        self.assertIn("Пока ни одной", self.tg.last())
+
+    def test_habit_without_name_hints(self) -> None:
+        self.scheduler.on_message(CHAT, "/habit", _support.at(2026, 11, 16, 9, 0))
+        self.assertIn("/habit зарядка", self.tg.last())
+        self.assertEqual(self.storage.habits(), [])
+
+    def test_help_mentions_habits(self) -> None:
+        text = self.scheduler.help_text()
+        self.assertIn("/habit", text)
+        self.assertIn("/habits", text)
+
+
+class OnboardingFirstMessageTestCase(SchedulerTestBase):
+    """P1-2/P1-3: знакомство не теряет первое содержательное сообщение."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.scheduler = self.make_scheduler(app__onboarding=True)
+
+    def test_greeting_without_start_still_onboards(self) -> None:
+        self.scheduler.on_message(CHAT, "привет", _support.at(2026, 11, 16, 9, 0))
+        self.assertIn("дневник-собеседник", self.tg.last(),
+                      "первое «привет» должно показать знакомство")
+        self.assertEqual(self.storage.kv_get("onboarding_choice"), "1")
+        # следующий ответ «да» уже начинает сессию — онбординг не потерян
+        self.scheduler.on_message(CHAT, "да", _support.at(2026, 11, 16, 9, 1))
+        self.assertIsNotNone(self.storage.kv_get("session"))
+        self.assertEqual(self.storage.kv_get("onboarded"), "1")
+
+    def test_meaningful_first_message_is_saved(self) -> None:
+        self.scheduler.on_message(
+            CHAT, "съел суп и салат", _support.at(2026, 11, 16, 9, 0)
+        )
+        self.assertIn("дневник-собеседник", self.tg.texts()[0])
+        entries = self.all_entries()
+        self.assertEqual(len(entries), 1, "сообщение не потерялось")
+        self.assertEqual(entries[0]["category"], "food")
+        self.assertEqual(self.storage.kv_get("onboarding_choice"), "1")
+
+    def test_meaningful_reply_after_start_is_kept(self) -> None:
+        self.scheduler.on_message(CHAT, "/start", _support.at(2026, 11, 16, 9, 0))
+        self.scheduler.on_message(
+            CHAT, "съел суп и салат", _support.at(2026, 11, 16, 9, 1)
+        )
+        self.assertIn("Знакомство пропущу", self.tg.last())
+        self.assertEqual(self.storage.kv_get("onboarded"), "1")
+        self.assertEqual(len(self.all_entries()), 1)
+
+
+class FreeTextAckTestCase(SchedulerTestBase):
+    """P2: «ок» — подтверждение, а не заметка в дневнике."""
+
+    def test_ok_is_not_saved(self) -> None:
+        self.scheduler.on_message(CHAT, "ок", _support.at(2026, 11, 16, 12, 0))
+        self.assertEqual(self.all_entries(), [])
+        self.assertNotIn("Записал", self.tg.last())
+
+    def test_ladno_is_not_saved(self) -> None:
+        self.scheduler.on_message(CHAT, "ладно, понял",
+                                  _support.at(2026, 11, 16, 12, 0))
+        self.assertEqual(self.all_entries(), [])
+
+
+class ReportPluralTestCase(SchedulerTestBase):
+    """P2: в /report «1 запись», а не «1 записей»."""
+
+    def _add_sleep(self, date: str, hour: int) -> None:
+        self.storage.add_entry({
+            "date": date, "ts": date + "T%02d:00:00+03:00" % hour,
+            "slot": "morning", "category": "sleep", "title": "сон",
+            "text": "спал", "metrics": {"sleep_h": 7},
+        })
+
+    def test_one_sleep_record_is_declined(self) -> None:
+        from datetime import datetime
+
+        today = datetime.now(_support.MSK).date()
+        self._add_sleep(today.isoformat(), 8)
+        text = self.scheduler.report_text()
+        self.assertIn("(1 запись)", text)
+        self.assertNotIn("1 записей", text)
+
+    def test_two_sleep_records_are_declined(self) -> None:
+        from datetime import datetime
+
+        today = datetime.now(_support.MSK).date()
+        self._add_sleep(today.isoformat(), 8)
+        self._add_sleep(today.isoformat(), 9)
+        text = self.scheduler.report_text()
+        self.assertIn("(2 записи)", text)
+
+
+class StatusQuietHoursTestCase(SchedulerTestBase):
+    """P2: /status показывает тихие часы, а не «слоты просто ждут»."""
+
+    def test_status_mentions_quiet_window(self) -> None:
+        scheduler = self.make_scheduler(app__quiet_hours=["23:00", "08:00"])
+        text = scheduler.status_text()
+        self.assertIn("Тихие часы", text)
+        self.assertIn("08:00", text)
+
+    def test_status_at_night_says_until_morning(self) -> None:
+        scheduler = self.make_scheduler(app__quiet_hours=["23:00", "08:00"])
+        fixed = _support.at(2026, 11, 16, 23, 30)
+
+        class _FakeDatetime(scheduler_mod.datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return fixed.astimezone(tz) if tz is not None else fixed
+
+        with mock.patch.object(scheduler_mod, "datetime", _FakeDatetime):
+            text = scheduler.status_text()
+        self.assertIn("тихие часы до 08:00", text.lower())
 
 
 if __name__ == "__main__":

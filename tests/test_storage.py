@@ -179,6 +179,55 @@ class StorageTestCase(unittest.TestCase):
             self.storage.upsert_goal({"title": ""})
         self.assertIsNone(self.storage.get_goal(99999))
 
+    def test_old_goals_table_is_migrated(self) -> None:
+        """P0-1: в старой БД без start/direction колонки добавляются сами."""
+        legacy_path = str(Path(self._tmp.name) / "legacy.db")
+        conn = sqlite3.connect(legacy_path)
+        try:
+            conn.execute(
+                "CREATE TABLE goals ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, target TEXT, "
+                "current TEXT, deadline TEXT, status TEXT DEFAULT 'active', "
+                "note TEXT, created TEXT, updated TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO goals(title, target, current, status) "
+                "VALUES ('Пробежать 10 км', '10', '3', 'active')"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        legacy = storage_mod.Storage(legacy_path)
+        try:
+            goal = legacy.goals()[0]
+            self.assertEqual(goal["title"], "Пробежать 10 км")
+            self.assertEqual(goal["start"], "")
+            self.assertEqual(goal["direction"], "")
+            # новые колонки пишутся и читаются
+            legacy.upsert_goal({"id": goal["id"], "start": "3",
+                                "direction": "up"})
+            goal = legacy.get_goal(goal["id"])
+            self.assertEqual(goal["start"], "3")
+            self.assertEqual(goal["direction"], "up")
+        finally:
+            legacy.close()
+
+    def test_goal_start_and_direction_roundtrip(self) -> None:
+        goal_id = self.storage.upsert_goal({
+            "title": "Сбросить вес", "target": "78", "current": "92",
+            "start": "92", "direction": "down",
+        })
+        goal = self.storage.get_goal(goal_id)
+        self.assertEqual(goal["start"], "92")
+        self.assertEqual(goal["direction"], "down")
+        # частичное обновление current не затирает start/direction
+        self.storage.upsert_goal({"id": goal_id, "current": "85"})
+        goal = self.storage.get_goal(goal_id)
+        self.assertEqual(goal["start"], "92")
+        self.assertEqual(goal["direction"], "down")
+        self.assertEqual(goal["current"], "85")
+
     def test_goal_sql_injection_safe(self) -> None:
         evil = "'; DROP TABLE goals; --"
         self.storage.upsert_goal({"title": evil, "note": "\"quoted\""})

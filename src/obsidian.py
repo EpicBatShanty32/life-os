@@ -44,6 +44,11 @@ try:  # zoneinfo — stdlib с Python 3.9, но на всякий случай �
 except Exception:  # pragma: no cover - экзотическая сборка Python
     ZoneInfo = None  # type: ignore[assignment]
 
+try:  # обычный запуск: from src import obsidian
+    from . import goals_math
+except ImportError:  # запасной вариант: файл запущен как одиночный модуль
+    import goals_math  # type: ignore[no-redef]
+
 logger = logging.getLogger("lifeos.vault")
 
 __all__ = [
@@ -170,9 +175,41 @@ class ProgrammerError(TypeError):
     """
 
 
+class VaultPathError(Exception):
+    """Путь настройки уводит за пределы vault.
+
+    Поднимается, если ``daily_folder`` / ``goals_path`` / ``data_folder`` /
+    ``template_path`` абсолютный, содержит ``..`` или после разрешения
+    симлинков оказывается вне корня базы. Наружу не выходит: каждая операция
+    записи ловит его, пишет понятную строку в лог и ничего не пишет на диск.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Вспомогательные функции
 # ---------------------------------------------------------------------------
+
+
+def _is_inside(root: Path, candidate: Path) -> bool:
+    """Лежит ли ``candidate`` внутри ``root`` после разрешения симлинков.
+
+    Обе стороны разрешаются (``Path.resolve``), поэтому симлинк внутри vault,
+    ведущий наружу, проверку не проходит. Для несуществующих путей
+    ``resolve`` не падает (``strict=False`` по умолчанию в Python 3.6+):
+    разрешается та часть, которая уже есть на диске.
+    """
+    try:
+        resolved_root = Path(root).resolve()
+        resolved = Path(candidate).resolve()
+    except (OSError, RuntimeError):  # pragma: no cover — экзотические ФС
+        return False
+    if hasattr(resolved, "is_relative_to"):  # Python 3.9+
+        return resolved.is_relative_to(resolved_root)
+    try:  # pragma: no cover — страховка для очень старых интерпретаторов
+        resolved.relative_to(resolved_root)
+    except ValueError:
+        return False
+    return True
 
 
 def _as_bool(value, default: bool) -> bool:
@@ -419,6 +456,23 @@ class Vault:
             path = self._root / path
         return Path(os.path.abspath(str(path)))
 
+    @staticmethod
+    def _root_is_sane(path: Path) -> bool:
+        """Годится ли путь как корень vault.
+
+        Корень диска (``/``) и домашний каталог — не база: запись туда
+        разбросала бы заметки по всей системе, поэтому такая конфигурация
+        считается невалидной (Obsidian отключается, бот продолжает работать).
+        """
+        try:
+            resolved = Path(path).resolve()
+            home = Path(os.path.expanduser("~")).resolve()
+        except (OSError, RuntimeError):  # pragma: no cover — экзотические ФС
+            return True
+        if resolved == Path(resolved.anchor or os.sep):
+            return False
+        return resolved != home
+
     def _check_vault_root(self, log_issue: bool = False) -> bool:
         """Есть ли корень vault и является ли он папкой (ничего не создаёт)."""
         path = self.vault_path
@@ -426,7 +480,17 @@ class Vault:
             return False
         try:
             if path.is_dir():
-                return True
+                if self._root_is_sane(path):
+                    return True
+                if log_issue:
+                    logger.error(
+                        "obsidian.vault_path %s — недопустимый корень базы "
+                        "(корень диска или домашний каталог). Запись в Obsidian "
+                        "отключена: укажите папку самой базы, например "
+                        "~/Documents/Obsidian/Мой vault.",
+                        path,
+                    )
+                return False
             exists = path.exists()
         except OSError as exc:
             if log_issue:
@@ -502,16 +566,67 @@ class Vault:
                 pass
         return datetime.now().astimezone()
 
-    def _vault_abs(self, value: str) -> Path:
-        """Путь внутри vault (daily_folder, goals_path и т.п.) → абсолютный."""
-        path = Path(os.path.expanduser(str(value)))
-        if path.is_absolute():
-            return Path(os.path.abspath(str(path)))
+    def _vault_root_real(self) -> Optional[Path]:
+        """Разрешённый корень vault или ``None``, если базы сейчас нет.
+
+        Считается каждый раз: папку могут открыть в Obsidian уже после старта
+        агента — тогда проверка вложенности должна включиться сама.
+        """
+        path = self.vault_path
+        if path is None:
+            return None
+        try:
+            if not path.is_dir():
+                return None
+            return Path(path).resolve()
+        except (OSError, RuntimeError):  # pragma: no cover — экзотические ФС
+            return None
+
+    def _raw_join(self, value: str) -> Path:
+        """Абсолютный путь без проверки вложенности (для сообщений и возврата)."""
+        raw = Path(os.path.expanduser(str(value)))
         base = self.vault_path if self.vault_path is not None else self._root
-        return Path(os.path.abspath(str(base / path)))
+        return Path(os.path.abspath(str(raw if raw.is_absolute() else base / raw)))
+
+    def _assert_inside(self, path: Path) -> None:
+        """Проверяет, что путь после ``resolve()`` лежит внутри vault.
+
+        Raises:
+            VaultPathError: путь вышел за пределы базы (``..``, симлинк наружу).
+        """
+        root = self._vault_root_real()
+        if root is None:
+            # Базы нет или она не настроена — писать всё равно нельзя:
+            # _require_vault вернёт False, до диска дело не дойдёт.
+            return
+        if not _is_inside(root, path):
+            raise VaultPathError(
+                "путь %s оказался вне vault %s" % (path, root)
+            )
+
+    def _vault_abs(self, value: str) -> Path:
+        """Путь настройки (daily_folder, goals_path и т.п.) → абсолютный внутри vault.
+
+        Raises:
+            VaultPathError: значение абсолютное либо выходит за пределы vault.
+        """
+        raw = Path(os.path.expanduser(str(value)))
+        if raw.is_absolute():
+            raise VaultPathError(
+                "путь %r задан абсолютным, а должен быть относительным внутри vault"
+                % (value,)
+            )
+        base = self.vault_path if self.vault_path is not None else self._root
+        path = Path(os.path.abspath(str(base / raw)))
+        self._assert_inside(path)
+        return path
 
     def _daily_path(self, date_str: str) -> Path:
-        return self._vault_abs(self.daily_folder) / ("%s.md" % date_str)
+        path = self._vault_abs(self.daily_folder) / ("%s.md" % date_str)
+        # Проверяем итоговый файл, а не только папку: так в проверку попадает
+        # и сам симлинк на заметку.
+        self._assert_inside(path)
+        return path
 
     @staticmethod
     def _validate_date(value) -> str:
@@ -548,21 +663,28 @@ class Vault:
 
     def _render_template(self, date_str: str) -> str:
         """Текст новой дневной заметки: шаблон с подстановками или каркас."""
-        template_file = self._template_file()
         text = None
         try:
-            text = template_file.read_text(encoding="utf-8")
-        except FileNotFoundError:
-            logger.info(
-                "Шаблон дневной заметки не найден (%s) — используется каркас",
-                template_file,
+            template_file = self._template_file()
+        except VaultPathError as exc:
+            logger.error(
+                "Шаблон дневной заметки вне vault (%s) — используется каркас", exc
             )
-        except (OSError, UnicodeDecodeError) as exc:
-            logger.warning(
-                "Не удалось прочитать шаблон %s (%s) — используется каркас",
-                template_file,
-                exc,
-            )
+            template_file = None
+        if template_file is not None:
+            try:
+                text = template_file.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                logger.info(
+                    "Шаблон дневной заметки не найден (%s) — используется каркас",
+                    template_file,
+                )
+            except (OSError, UnicodeDecodeError) as exc:
+                logger.warning(
+                    "Не удалось прочитать шаблон %s (%s) — используется каркас",
+                    template_file,
+                    exc,
+                )
         display_date = datetime.strptime(date_str, "%Y-%m-%d").strftime("%d.%m.%Y")
         if text is None:
             text = _SKELETON.format(display_date=display_date)
@@ -605,9 +727,21 @@ class Vault:
         Если файла нет — он создаётся из ``template_path`` (UTF-8) с
         подстановкой ``{{date:DD.MM.YYYY}}``, ``{{date}}``, ``{{title}}``;
         если шаблона нет — минимальный каркас. Существующий файл не трогается.
+
+        Если ``daily_folder`` уводит за пределы vault (``..``, абсолютный путь,
+        симлинк наружу) — в лог пишется понятная ошибка, на диск ничего не
+        пишется, а возвращается «ожидаемый» путь без создания файла.
         """
         date_str = self._validate_date(date)
-        path = self._daily_path(date_str)
+        try:
+            path = self._daily_path(date_str)
+        except VaultPathError as exc:
+            logger.error(
+                "Дневная заметка не создана: %s. Проверьте obsidian.daily_folder "
+                "в конфиге — путь должен быть относительным внутри vault.",
+                exc,
+            )
+            return self._raw_join(self.daily_folder) / ("%s.md" % date_str)
         if not self._require_vault("создание дневной заметки"):
             return path
         if path.exists():
@@ -716,6 +850,9 @@ class Vault:
                 return False
             content = path.read_text(encoding="utf-8")
             return bool(self._marker_regex(marker_id).search(content))
+        except VaultPathError as exc:
+            logger.error("Маркер записи не проверен: %s", exc)
+            return False
         except Exception:
             logger.exception("Не удалось проверить маркер записи")
             return False
@@ -869,22 +1006,17 @@ class Vault:
         return "[[%s]]" % title.replace("|", "\\|")
 
     def _goal_progress(self, goal: dict) -> str:
-        current = goal.get("current")
-        target = goal.get("target")
-        current_number = _number_from(current)
-        target_number = _number_from(target)
-        if (
-            current_number is not None
-            and target_number is not None
-            and target_number != 0
-        ):
-            percent = current_number / target_number * 100.0
-            rounded = round(percent)
-            if abs(percent - rounded) < 0.05:
-                return "%d%%" % rounded
-            return "%.1f%%" % percent
-        current_text = _clean_cell(current, default="")
-        target_text = _clean_cell(target, default="")
+        """Прогресс цели строкой: ``0%`` / ``50%`` / ``100%``.
+
+        Считает :mod:`src.goals_math` — тот же расчёт, что в боте и на
+        дашборде. Раньше здесь было ``current / target`` без учёта
+        направления: цель «вес 92 → 78» показывала 117,9% (UX_REVIEW, P0-1).
+        """
+        percent = goals_math.goal_percent(goal)
+        if percent is not None:
+            return "%d%%" % percent
+        current_text = _clean_cell(goal.get("current"), default="")
+        target_text = _clean_cell(goal.get("target"), default="")
         if current_text and target_text:
             return "%s / %s" % (current_text, target_text)
         return current_text or "—"
@@ -1000,6 +1132,13 @@ class Vault:
                 "Таблица целей обновлена (%d шт.) в %s", len(goals), path.name
             )
             return True
+        except VaultPathError as exc:
+            logger.error(
+                "Цели не обновлены: %s. Проверьте obsidian.goals_path — путь "
+                "должен быть относительным внутри vault.",
+                exc,
+            )
+            return False
         except Exception:
             logger.exception("Не удалось обновить цели в Obsidian")
             return False
@@ -1076,6 +1215,12 @@ class Vault:
                     self._atomic_write(folder / _MIRROR_GOALS_NAME, text)
                 except Exception:
                     logger.exception("Не удалось записать %s", _MIRROR_GOALS_NAME)
+        except VaultPathError as exc:
+            logger.error(
+                "Зеркало не записано: %s. Проверьте obsidian.data_folder — путь "
+                "должен быть относительным внутри vault.",
+                exc,
+            )
         except Exception:
             logger.exception("Ошибка write_mirror")
 

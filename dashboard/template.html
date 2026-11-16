@@ -13,26 +13,40 @@
      Life OS · dashboard
      self-contained: без внешних шрифтов, картинок и скриптов.
      Токены дизайна: светлая тема, мягкие тени, пастельные акценты.
-     Вторичный/третичный текст чуть темнее исходной палитры — для
-     читаемости мелких подписей (контраст ≥ 3.5:1 на белом).
+
+     Контраст мелкого текста (WCAG AA, 4.5:1) — проверенные пары:
+       --muted #656873 — 5.55:1 на #FFFFFF, 5.19:1 на #F6F7FB
+       --faint #6C6F7A — 5.01:1 на #FFFFFF, 4.68:1 на #F6F7FB
+     Текст на пастельных плашках берёт "-ink"-варианты (≥4.5:1 на своей
+     плашке), а "-deep" остаются для иконок и заливок (не-текст, ≥3:1).
+     Линии графиков темнее декоративных пастелей: ≥3:1 на белом —
+     тонкая линия иначе не читается (WCAG 1.4.11).
      ───────────────────────────────────────────────────────────── */
   :root{
     --bg:#F6F7FB;
     --card:#FFFFFF;
     --ink:#17181C;
     --ink-2:#4B4E58;
-    --muted:#6C6F7A;
-    --faint:#7D808B;
+    --muted:#656873;
+    --faint:#6C6F7A;
     --line:rgba(23,24,28,.06);
     --line-2:rgba(23,24,28,.10);
     --track:rgba(23,24,28,.06);
 
     --violet:#A18BB7;  --violet-deep:#6F5A86;
-    --mint:#AEDEC2;    --mint-deep:#5A8F73;
+    --mint:#AEDEC2;    --mint-deep:#5A8F73;  --mint-ink:#47755B;
     --peach:#F2C9B6;   --peach-deep:#AF7A5F;
-    --blue:#B9CBE8;    --blue-deep:#68819F;
-    --rose:#E8C7D8;    --rose-deep:#9E6485;
-    --sand:#E9DCC9;    --sand-deep:#93794F;
+    --blue:#B9CBE8;    --blue-deep:#68819F;  --blue-ink:#56708D;
+    --rose:#E8C7D8;    --rose-deep:#9E6485;  --rose-ink:#8C5476;
+    --sand:#E9DCC9;    --sand-deep:#93794F;  --sand-ink:#6F5B3A;
+
+    /* данные: подписи осей и линии графиков */
+    --chart-ink:#656873;
+    --chart-sleep:#6D8CBF;
+    --chart-calories:#BE7E55;
+    --chart-mood:#81669E;
+    --chart-energy:#5F9C7C;
+    --focus:#5B4A72;
 
     --shadow:0 8px 24px rgba(23,24,28,.06);
     --shadow-hover:0 14px 34px rgba(23,24,28,.10);
@@ -62,6 +76,28 @@
     min-height:100vh;
   }
   ::selection{background:rgba(161,139,183,.22)}
+
+  /* skip-link: не виден, пока не попадёшь на него с клавиатуры */
+  .skip{
+    position:absolute;left:-9999px;top:0;z-index:20;text-decoration:none;
+    background:var(--card);color:var(--ink);font-size:13px;font-weight:600;
+    padding:10px 16px;border-radius:0 0 var(--r-sm) 0;box-shadow:var(--shadow-hover);
+  }
+  .skip:focus,.skip:focus-visible{left:0;outline:2px solid var(--focus);outline-offset:2px}
+
+  /* клавиатурный фокус: один видимый стиль для ссылок, кнопок и кликабельных
+     элементов; по клику мышью кольцо не появляется (:focus-visible) */
+  :where(a,button,[tabindex]):focus-visible,
+  .card:focus-visible{
+    outline:2px solid var(--focus);outline-offset:2px;border-radius:6px;
+  }
+  .grid:focus-visible{outline:2px solid var(--focus);outline-offset:6px;border-radius:var(--r-lg)}
+
+  /* тач: без серой вспышки по тапу и без задержки двойного тапа */
+  a,button,[tabindex],.heat-cell,.week-day i,.habit-week i{
+    touch-action:manipulation;
+    -webkit-tap-highlight-color:transparent;
+  }
 
   .page{max-width:1440px;margin:0 auto;padding:32px 36px 40px}
   @media (max-width:1100px){.page{padding:24px 20px 32px}}
@@ -94,32 +130,36 @@
     transition:transform .16s var(--ease), box-shadow .16s var(--ease), border-color .16s var(--ease), background .16s var(--ease);
   }
   .btn svg{width:14px;height:14px;display:block;color:var(--muted);transition:transform .4s var(--ease)}
-  .btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(23,24,28,.09);border-color:var(--line-2);background:#FCFCFE}
-  .btn:hover svg{transform:rotate(90deg)}
-  .btn:active{transform:translateY(0);box-shadow:0 2px 6px rgba(23,24,28,.06)}
-  .btn:focus-visible{outline:2px solid rgba(161,139,183,.55);outline-offset:2px}
+  .btn:active{transform:translateY(0);box-shadow:0 2px 6px rgba(23,24,28,.06);border-color:var(--line-2)}
+  .btn:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
 
   /* ── приветствие ───────────────────────────────────────── */
   .hello{display:flex;align-items:flex-end;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin:2px 0 22px}
-  .hello h2{margin:0;font-size:30px;line-height:1.1;font-weight:700;letter-spacing:-.03em}
+  .hello h2{margin:0;font-size:30px;line-height:1.1;font-weight:700;letter-spacing:-.03em;text-wrap:balance}
   .hello .date{margin:7px 0 0;font-size:14px;color:var(--muted);font-variant-numeric:tabular-nums}
   .hello .sub{margin:0;font-size:12.5px;color:var(--faint);max-width:520px;text-align:right;line-height:1.5}
   @media (max-width:760px){
     .hello{margin-bottom:18px}
     .hello h2{font-size:26px}
-    .hello .sub{text-align:left}
+    .hello .sub{text-align:left;max-width:none}
   }
+  /* шапка на узком экране: бренд и действия — в две строки, подзаголовок
+     переносится по словам и обрезается двумя строками, а не по одному слову */
   @media (max-width:620px){
-    .topbar{flex-wrap:wrap;align-items:flex-start;row-gap:12px}
-    .actions{width:100%;justify-content:space-between}
-    .stamp{font-size:11.5px;white-space:normal}
+    .topbar{flex-wrap:wrap;align-items:flex-start;gap:10px 14px;row-gap:12px}
+    .actions{width:100%;justify-content:space-between;gap:10px;flex-wrap:wrap;row-gap:8px}
+    .stamp{font-size:11.5px;white-space:normal;line-height:1.35}
+    .brand p{
+      white-space:normal;line-height:1.35;
+      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+    }
     .btn{padding:8px 12px}
   }
   @media (max-width:420px){
     .page{padding:18px 14px 28px}
-    .brand p{display:none}
     .logo{width:38px;height:38px;border-radius:12px}
     .brand h1{font-size:18px}
+    .brand p{font-size:12px}
     .hello h2{font-size:23px}
     .kpis{gap:10px}
     .grid{gap:12px}
@@ -140,7 +180,6 @@
     content:"";position:absolute;left:15px;right:15px;bottom:0;height:2px;border-radius:2px 2px 0 0;
     background:var(--accent,transparent);opacity:.5;
   }
-  .kpi:hover{transform:translateY(-1px);box-shadow:var(--shadow-hover)}
   .kpi .label{font-size:12px;color:var(--muted);font-weight:500;letter-spacing:.005em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .kpi .value{
     display:flex;align-items:baseline;gap:5px;min-width:0;
@@ -151,6 +190,14 @@
   .kpi .value .unit{font-size:11.5px;font-weight:600;color:var(--muted);letter-spacing:0;flex:0 0 auto}
   .kpi .hint{font-size:11.5px;color:var(--faint);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:auto}
   .kpi .value.is-empty{font-size:20px;color:var(--faint);letter-spacing:0}
+  /* на узком экране подписи KPI не обрезаются: переносим на 2 строки */
+  @media (max-width:679px){
+    .kpi{min-height:0;padding:12px 13px 11px}
+    .kpi .label,.kpi .hint{
+      white-space:normal;overflow:hidden;text-overflow:clip;
+      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
+    }
+  }
 
   /* ── сетка карточек (bento) ────────────────────────────── */
   .grid{
@@ -194,7 +241,6 @@
     display:flex;flex-direction:column;min-width:0;position:relative;
     transition:box-shadow .2s var(--ease), transform .2s var(--ease), border-color .2s var(--ease);
   }
-  .card:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px);border-color:rgba(23,24,28,.085)}
   @media (max-width:760px){.card{padding:17px 17px 18px;border-radius:18px}}
 
   .card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:15px}
@@ -232,7 +278,6 @@
     display:flex;align-items:center;gap:10px;font-size:13.5px;
     padding:7px 8px;margin:0 -8px;border-radius:10px;transition:background .16s var(--ease);
   }
-  .slot:hover{background:rgba(23,24,28,.028)}
   .slot .dot{
     width:19px;height:19px;border-radius:50%;flex:0 0 auto;
     border:1.5px solid rgba(23,24,28,.15);background:#fff;display:grid;place-items:center;
@@ -251,7 +296,7 @@
   .week-head b{font-weight:600;color:var(--muted)}
   .week-dots{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
   .week-day{display:flex;flex-direction:column;align-items:center;gap:5px;min-width:0}
-  .week-day b{font-size:10px;font-weight:500;color:var(--faint);letter-spacing:.02em}
+  .week-day b{font-size:10.5px;font-weight:500;color:var(--faint);letter-spacing:.02em}
   .week-day i{display:block;width:100%;height:6px;border-radius:99px;background:#EEF0F4}
 
   /* ── цели ──────────────────────────────────────────────── */
@@ -273,9 +318,9 @@
     letter-spacing:.005em;
   }
   .pill.is-active{background:rgba(161,139,183,.14);color:var(--violet-deep)}
-  .pill.is-done{background:rgba(174,222,194,.34);color:var(--mint-deep)}
-  .pill.is-paused{background:rgba(233,220,201,.55);color:var(--sand-deep)}
-  .pill.is-failed{background:rgba(232,199,216,.42);color:var(--rose-deep)}
+  .pill.is-done{background:rgba(174,222,194,.34);color:var(--mint-ink)}
+  .pill.is-paused{background:rgba(233,220,201,.55);color:var(--sand-ink)}
+  .pill.is-failed{background:rgba(232,199,216,.42);color:var(--rose-ink)}
   .more{margin-top:2px;font-size:11.5px;color:var(--faint)}
 
   /* ── журнал ────────────────────────────────────────────── */
@@ -286,8 +331,6 @@
     transition:background .16s var(--ease);
   }
   .feed-item:last-child{border-bottom:0;padding-bottom:0}
-  .feed-item:hover{background:rgba(23,24,28,.025)}
-  .feed-item:last-child:hover{padding-bottom:10px;margin-bottom:-10px}
   .feed-dot{width:7px;height:7px;border-radius:50%;margin-top:8px;flex:0 0 auto;opacity:.95}
   .feed-main{min-width:0;flex:1}
   .feed-meta{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--faint);margin-bottom:3px;min-width:0}
@@ -305,17 +348,16 @@
     display:flex;flex-direction:column;gap:6px;padding:8px;margin:0 -8px;border-radius:11px;min-width:0;
     transition:background .16s var(--ease);
   }
-  .habit:hover{background:rgba(23,24,28,.028)}
   .habit-main{display:flex;align-items:center;gap:9px;min-width:0}
   .habit-mark{width:18px;height:18px;border-radius:6px;flex:0 0 auto;display:grid;place-items:center;background:rgba(23,24,28,.05);color:var(--faint)}
   .habit-mark svg{width:11px;height:11px;display:block}
   .habit-dot{display:block;width:5px;height:5px;border-radius:50%;background:rgba(23,24,28,.22)}
-  .habit.is-today .habit-mark{background:rgba(174,222,194,.45);color:var(--mint-deep)}
+  .habit.is-today .habit-mark{background:rgba(174,222,194,.45);color:var(--mint-ink)}
   .habit-name{font-size:13px;font-weight:500;color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
   .habit-when{font-size:11px;color:var(--faint);white-space:nowrap;flex:0 0 auto}
   .habit-week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;max-width:178px;padding-left:27px}
   .habit-week i{display:block;height:4px;border-radius:99px;background:#EEF0F4;transition:background .16s var(--ease)}
-  .habit-week i.on{background:rgba(161,139,183,.55)}
+  .habit-week i.on{background:#81669E}
   .habit-streak{
     font-size:11px;font-weight:700;color:var(--violet-deep);background:rgba(161,139,183,.13);
     padding:2.5px 8px;border-radius:99px;white-space:nowrap;flex:0 0 auto;font-variant-numeric:tabular-nums;
@@ -325,7 +367,7 @@
   .heat{display:flex;flex-direction:column;gap:0;min-width:0}
   .heat-wrap{display:flex;gap:8px;min-width:0;position:relative}
   .heat-days{display:grid;grid-template-rows:repeat(7,14px);gap:3px;flex:0 0 auto;width:24px}
-  .heat-days span{font-size:10px;line-height:14px;color:var(--faint);text-align:right}
+  .heat-days span{font-size:10.5px;line-height:14px;color:var(--faint);text-align:right}
   .heat-body{min-width:0;flex:1}
   .heat-cols{display:flex;gap:3px;min-width:0;overflow:hidden}
   .heat-col{display:grid;grid-template-rows:repeat(7,14px);gap:3px}
@@ -333,40 +375,37 @@
     width:14px;height:14px;border-radius:4px;background:#EEF0F4;
     transition:transform .14s var(--ease), box-shadow .14s var(--ease);
   }
-  .heat-cell:hover{transform:scale(1.18);box-shadow:0 2px 8px rgba(23,24,28,.16);position:relative;z-index:1}
-  .heat-months{position:relative;height:14px;margin-top:6px;font-size:10px;color:var(--faint)}
+  .heat-months{position:relative;height:15px;margin-top:6px;font-size:10.5px;color:var(--faint)}
   .heat-months span{position:absolute;top:0;white-space:nowrap}
   .heat-legend{display:flex;align-items:center;gap:5px;font-size:10.5px;color:var(--faint);margin-top:10px}
   .heat-legend .heat-cell{width:10px;height:10px;border-radius:3px;flex:0 0 auto}
-  .heat-legend .heat-cell:hover{transform:none;box-shadow:none}
   .heat-legend .spacer{flex:1}
   .heat-legend .total{color:var(--muted);font-weight:600;font-variant-numeric:tabular-nums}
 
   /* ── графики ───────────────────────────────────────────── */
   .chart{display:block;width:100%;height:auto;overflow:visible}
-  .chart text{font-family:inherit;font-size:10.5px;fill:var(--faint);font-variant-numeric:tabular-nums}
+  .chart text{font-family:inherit;font-size:11.5px;font-weight:500;fill:var(--chart-ink);font-variant-numeric:tabular-nums}
   .chart-axis{
     display:flex;justify-content:space-between;gap:10px;margin-top:7px;
-    font-size:11px;color:var(--faint);font-variant-numeric:tabular-nums;padding:0 2px;
+    font-size:11.5px;color:var(--faint);font-variant-numeric:tabular-nums;padding:0 2px;
   }
   .chart-axis span{white-space:nowrap}
+  .chart-cap{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:11.5px;color:var(--faint);margin-bottom:6px}
+  .chart-cap span{white-space:nowrap}
   .chart-block{margin-top:14px}
   .chart-block:first-child{margin-top:0}
-  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--muted);margin-bottom:9px}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted);margin-bottom:9px}
   .legend span{display:inline-flex;align-items:center;white-space:nowrap}
   .legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;flex:0 0 auto}
 
-  .bars-axis{display:grid;grid-auto-flow:column;grid-auto-columns:1fr;margin-top:6px;font-size:9px;color:var(--faint);text-align:center}
-  .bars-axis span{white-space:nowrap;overflow:hidden}
-  .bars-axis span.is-today{color:var(--violet-deep);font-weight:700}
 
   .water-bar{height:8px;border-radius:99px;background:rgba(185,203,232,.30);overflow:hidden;margin-top:11px;position:relative}
   .water-bar > i{
     display:block;height:100%;border-radius:99px;width:0;
-    background:linear-gradient(90deg,#C6D6EC,#A9BEE2);
+    background:linear-gradient(90deg,#9FB7DE,#68819F);
   }
   .water-meta{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:11.5px;color:var(--faint);margin-top:6px}
-  .water-meta b{font-weight:600;color:var(--blue-deep)}
+  .water-meta b{font-weight:600;color:var(--blue-ink)}
   .card-foot{
     margin-top:auto;padding-top:13px;border-top:1px solid var(--line);
     display:flex;align-items:baseline;justify-content:space-between;gap:10px;
@@ -396,21 +435,39 @@
   footer .foot-left{display:flex;align-items:center;gap:8px;min-width:0}
   footer .foot-dot{width:3px;height:3px;border-radius:50%;background:var(--faint);opacity:.6}
   footer .foot-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-variant-numeric:tabular-nums}
-  footer .iso{opacity:.75}
+  footer .iso{color:var(--faint)} /* без opacity: иначе контраст 2.93:1 < AA */
+
+  /* ── hover только там, где есть настоящий указатель ──────
+     на тач-устройствах :hover срабатывает от тапа и остаётся
+     включённым до следующего касания — там эффекты не нужны */
+  @media (hover:hover) and (pointer:fine){
+    .btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(23,24,28,.09);border-color:var(--line-2);background:#FCFCFE}
+    .btn:hover svg{transform:rotate(90deg)}
+    .card:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px);border-color:rgba(23,24,28,.085)}
+    .kpi:hover{transform:translateY(-1px);box-shadow:var(--shadow-hover)}
+    .slot:hover{background:rgba(23,24,28,.028)}
+    .feed-item:hover{background:rgba(23,24,28,.025)}
+    .feed-item:last-child:hover{padding-bottom:10px;margin-bottom:-10px}
+    .habit:hover{background:rgba(23,24,28,.028)}
+    .heat-cell:hover{transform:scale(1.18);box-shadow:0 2px 8px rgba(23,24,28,.16);position:relative;z-index:1}
+    .heat-legend .heat-cell:hover{transform:none;box-shadow:none}
+  }
 
   @media (prefers-reduced-motion:reduce){
     *,*::before,*::after{transition:none !important;animation:none !important}
-    .card:hover,.kpi:hover{transform:none}
+    .btn:hover,.card:hover,.kpi:hover,.heat-cell:hover{transform:none}
+    .btn:hover svg{transform:none}
   }
   @media print{
     body{background:#fff}
-    .actions,.btn{display:none}
+    .actions,.btn,.skip{display:none}
     .card{box-shadow:none;break-inside:avoid}
     .grid{gap:12px}
   }
 </style>
 </head>
 <body>
+<a class="skip" href="#main">К содержимому</a>
 <div class="page">
   <header class="topbar">
     <div class="brand">
@@ -441,7 +498,7 @@
 
   <section class="kpis" id="kpis" aria-label="Ключевые показатели"></section>
 
-  <main class="grid">
+  <main class="grid" id="main" tabindex="-1">
     <!-- Сегодня -->
     <section class="card card--today" aria-labelledby="h-today">
       <div class="card-head">
@@ -479,11 +536,12 @@
           <span class="card-ico ico-blue" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.4A8.3 8.3 0 0 1 9.6 4a8.5 8.5 0 1 0 10.4 10.4Z"/></svg></span>
           <h3 id="h-sleep">Сон</h3>
         </div>
-        <span class="card-tag">14 ночей</span>
+        <span class="card-tag" id="sleep-window">14 ночей</span>
       </div>
       <div class="card-body">
         <div class="metric"><span class="big" id="sleep-avg">—</span><span class="unit-label">в среднем</span></div>
         <div class="chart-block">
+          <div class="chart-cap"><span>сон, ч</span></div>
           <div id="sleep-chart"></div>
           <div class="chart-axis" id="sleep-axis"></div>
         </div>
@@ -504,9 +562,9 @@
         <div class="metric"><span class="big" id="training-count">—</span><span class="unit-label">из 7 дней</span></div>
         <div class="chart-block">
           <div id="training-chart"></div>
-          <div class="bars-axis" id="training-axis"></div>
+          <div class="chart-axis" id="training-axis"></div>
         </div>
-        <div class="card-foot" id="training-foot" hidden><span>за 14 дней</span><b id="training-total"></b></div>
+        <div class="card-foot" id="training-foot" hidden><span id="training-window">за две недели</span><b id="training-total"></b></div>
       </div>
     </section>
 
@@ -517,17 +575,18 @@
           <span class="card-ico ico-peach" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.6c3.1 3.7 5.6 6.4 5.6 9.4a5.6 5.6 0 0 1-11.2 0c0-3 2.5-5.7 5.6-9.4Z"/></svg></span>
           <h3 id="h-food">Питание и вода</h3>
         </div>
-        <span class="card-tag">14 дней</span>
+        <span class="card-tag" id="food-window">14 дней</span>
       </div>
       <div class="card-body">
         <div class="metric"><span class="big" id="water-avg">—</span><span class="unit-label">вода в среднем</span></div>
         <div class="water-bar" role="progressbar" aria-label="Вода к цели" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="water-progress"><i id="water-bar" style="width:0%"></i></div>
         <div class="water-meta"><span>цель 2 000 мл</span><span id="water-pct"></span></div>
         <div class="chart-block">
+          <div class="chart-cap"><span>калории, ккал</span></div>
           <div id="calories-chart"></div>
           <div class="chart-axis" id="calories-axis"></div>
         </div>
-        <div class="nutrition-extra" id="calories-meta" hidden><span>калории</span><b id="calories-avg"></b></div>
+        <div class="nutrition-extra" id="calories-meta" hidden><span>калории в среднем</span><b id="calories-avg"></b></div>
       </div>
     </section>
 
@@ -538,16 +597,17 @@
           <span class="card-ico ico-rose" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M8.4 14.3a4.7 4.7 0 0 0 7.2 0"/><circle cx="9.4" cy="9.8" r=".9" fill="currentColor" stroke="none"/><circle cx="14.6" cy="9.8" r=".9" fill="currentColor" stroke="none"/></svg></span>
           <h3 id="h-mood">Настроение и энергия</h3>
         </div>
-        <span class="card-tag">14 дней</span>
+        <span class="card-tag" id="mood-window">14 дней</span>
       </div>
       <div class="card-body">
         <div class="legend">
-          <span><i style="background:#A18BB7"></i>настроение</span>
-          <span><i style="background:#AEDEC2"></i>энергия</span>
+          <span><i style="background:#81669E"></i>настроение</span>
+          <span><i style="background:#5F9C7C"></i>энергия</span>
         </div>
+        <div class="chart-cap"><span>оценка, 1–5</span></div>
         <div id="mood-chart"></div>
         <div class="chart-axis" id="mood-axis"></div>
-        <div class="card-foot" id="mood-foot" hidden><span>средняя энергия</span><b id="mood-energy"></b></div>
+        <div class="card-foot" id="mood-foot" hidden><span>энергия в среднем</span><b id="mood-energy"></b></div>
       </div>
     </section>
 
@@ -639,8 +699,17 @@
     food: "#F2C9B6", training: "#AEDEC2", tasks: "#B9CBE8", goals: "#A18BB7",
     mood: "#E8C7D8", journal: "#B9CBE8", sleep: "#9FB7DE", water: "#B9CBE8", other: "#D5D8DF"
   };
-  var GOAL_COLORS = ["#A18BB7", "#9FB7DE", "#AEDEC2", "#F2C9B6"];
+  /* полоски прогресса — тоже данные: держим ≥3:1 на белом */
+  var GOAL_COLORS = ["#81669E", "#6D8CBF", "#5F9C7C", "#BE7E55"];
   var WATER_GOAL_ML = 2000;
+  /* Линии графиков темнее пастельных акцентов: тонкая линия на белой
+     карточке должна держать ≥3:1 (WCAG 1.4.11), иначе она «исчезает». */
+  var CHART = {
+    sleep: "#6D8CBF",
+    calories: "#BE7E55",
+    mood: "#81669E",
+    energy: "#5F9C7C"
+  };
   var WEEK_LETTERS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
   var EMPTY_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.6"/><path d="M12 8.2v4.4"/><circle cx="12" cy="16" r=".9" fill="currentColor" stroke="none"/></svg>';
 
@@ -698,6 +767,62 @@
     return many;
   }
   function count(n, forms) { return ru(n, 0) + " " + plural(n, forms[0], forms[1], forms[2]); }
+
+  /* Окна периодов не выдумываем: сервер присылает window_days у kpis и
+     series (сейчас 14 дней — то же окно, что у графиков), а недельные
+     счётчики (отметки, тренировки, стрик) живут в окне 7 дней. Подписи
+     строятся из этих чисел, поэтому карточка никогда не обещает не то
+     окно, за которое посчитано число. */
+  var WEEK_DAYS = 7;
+  function avgWindow() {
+    var w = num(M.window.avg);
+    return w && w > 0 ? Math.round(w) : WEEK_DAYS;
+  }
+  function seriesWindow() {
+    return M.dates.length || avgWindow();
+  }
+  function avgOf(values) {
+    var sum = 0, cnt = 0;
+    for (var i = 0; i < values.length; i++) {
+      var v = num(values[i]);
+      if (v != null) { sum += v; cnt++; }
+    }
+    return cnt ? sum / cnt : null;
+  }
+  function windowAvg(values) {
+    var n = avgWindow();
+    var tail = values.length > n ? values.slice(values.length - n) : values;
+    var avg = avgOf(tail);
+    return avg == null ? avgOf(values) : avg;
+  }
+  function lastValue(values) {
+    for (var i = values.length - 1; i >= 0; i--) {
+      var v = num(values[i]);
+      if (v != null) return v;
+    }
+    return null;
+  }
+  /* «3 нояб — 16 нояб»: фактический диапазон точек на графике */
+  function rangeText() {
+    var d = M.dates;
+    if (!d.length) return "";
+    return dayMonth(d[0]) + " — " + dayMonth(d[d.length - 1]);
+  }
+  function ariaLabel(what, tail) {
+    var range = rangeText();
+    var parts = [what];
+    if (range) parts.push(range);
+    if (tail) parts.push(tail);
+    return parts.join(", ");
+  }
+  /* «за две недели» для подвала-итога: длину ряда знаем, но пишем словами */
+  function seriesSpanText() {
+    var n = seriesWindow(), weeks = Math.round(n / 7);
+    if (weeks === 1) return "за неделю";
+    if (weeks === 2) return "за две недели";
+    if (weeks === 3) return "за три недели";
+    return "за " + count(n, ["день", "дня", "дней"]);
+  }
   function isTruthy(v) {
     if (v === true || v === 1) return true;
     if (typeof v === "string") return v === "true" || v === "1" || v === "yes";
@@ -858,6 +983,12 @@
           evening: isTruthy(obj(today.checkins).evening)
         }
       },
+      window: {
+        /* kpis.window_days — окно средних (avg_sleep_h/mood_avg/water_avg_ml).
+           Нет поля — считаем по прежнему контракту: средние за неделю. */
+        avg: firstNum(kpisIn.window_days) || WEEK_DAYS,
+        week: WEEK_DAYS
+      },
       kpis: {
         streak: num(kpisIn.streak_days),
         checkinRate: num(kpisIn.checkin_rate_week),
@@ -907,21 +1038,23 @@
   function renderKpis() {
     var box = $("kpis");
     var k = M.kpis;
+    var winHint = "в среднем за " + count(avgWindow(), ["день", "дня", "дней"]);
+    var weekHint = "за " + count(WEEK_DAYS, ["день", "дня", "дней"]);
     box.innerHTML = "";
     var items = [
       { label: "Стрик", value: k.streak == null ? null : ru(k.streak, 0),
         unit: plural(k.streak, "день", "дня", "дней"), accent: "rgba(161,139,183,.45)",
         hint: "подряд с записями" },
       { label: "Чек-ины", value: k.checkinRate == null ? null : pct(k.checkinRate),
-        accent: "rgba(174,222,194,.55)", hint: "заполнено за неделю" },
+        accent: "rgba(174,222,194,.55)", hint: "заполнено " + weekHint },
       { label: "Тренировки", value: k.trainingWeek == null ? null : ru(k.trainingWeek, 0),
-        unit: "из 7", accent: "rgba(174,222,194,.55)", hint: "дней с тренировкой" },
+        unit: "из " + WEEK_DAYS, accent: "rgba(174,222,194,.55)", hint: "дней с тренировкой" },
       { label: "Сон", value: k.sleepAvg == null ? null : ru(k.sleepAvg, 1),
-        unit: "ч", accent: "rgba(185,203,232,.6)", hint: "в среднем за неделю" },
+        unit: "ч", accent: "rgba(185,203,232,.6)", hint: winHint },
       { label: "Вода", value: k.waterAvg == null ? null : ru(k.waterAvg, 0),
-        unit: "мл", accent: "rgba(185,203,232,.6)", hint: "в среднем за день" },
+        unit: "мл", accent: "rgba(185,203,232,.6)", hint: winHint },
       { label: "Настроение", value: k.moodAvg == null ? null : ru(k.moodAvg, 1),
-        unit: "из 5", accent: "rgba(232,199,216,.6)", hint: "средняя оценка" }
+        unit: "из 5", accent: "rgba(232,199,216,.6)", hint: winHint }
     ];
     for (var i = 0; i < items.length; i++) box.appendChild(kpiCard(items[i]));
   }
@@ -1123,8 +1256,8 @@
     var labels = opts.ticks || null;
     var padL = labels ? 24 : 3;
     var padR = 4;
-    var padT = 10;
-    var padB = 8;
+    var padT = labels ? 16 : 10;   /* место под подпись верхнего тика */
+    var padB = 10;
     var dataMin = Math.min.apply(null, pts.map(function (p) { return p.v; }));
     var dataMax = Math.max.apply(null, pts.map(function (p) { return p.v; }));
     var min, max;
@@ -1232,7 +1365,7 @@
       svg.appendChild(svgEl("rect", {
         x: xx.toFixed(1), y: yy.toFixed(1), width: bw.toFixed(1), height: (on ? bh : 4).toFixed(1),
         rx: Math.min(6, bw / 2),
-        fill: on ? (isLast ? "#A18BB7" : "#AEDEC2") : "rgba(23,24,28,.07)"
+        fill: on ? (isLast ? CHART.mood : CHART.energy) : "rgba(23,24,28,.10)"
       }));
     }
     host.appendChild(svg);
@@ -1260,10 +1393,13 @@
       return;
     }
     var drawn = lineChart($("sleep-chart"), {
-      values: s, color: "#9FB7DE", fill: true, height: 108, min: 4, max: 10,
+      values: s, color: CHART.sleep, fill: true, height: 112, weight: 2.4, min: 4, max: 10,
       ticks: [4, 6, 8, 10], fmtTick: function (v) { return ru(v, 0); },
       mark: 8, markLabel: "норма 8 ч", dots: s.length <= 20,
-      label: "Сон по дням, 14 дней"
+      label: ariaLabel("Сон по дням", (function () {
+        var v = lastValue(s);
+        return v == null ? "нет данных" : "последняя ночь " + ru(v, 1) + " ч";
+      })())
     });
     if (drawn) renderAxis("sleep-axis"); else $("sleep-axis").innerHTML = "";
     var nights = 0;
@@ -1271,19 +1407,27 @@
     var foot = $("sleep-foot");
     if (nights) { foot.hidden = false; $("sleep-best").textContent = nights + " из " + s.length; }
     else { foot.hidden = true; }
+    var winEl = $("sleep-window");
+    if (winEl) winEl.textContent = count(avgWindow(), ["ночь", "ночи", "ночей"]);
   }
 
+  /* Под осью — три даты: начало, середина, конец ряда. Две подписи
+     читались как «за неделю», хотя ряд длиннее. */
   function renderAxis(id) {
     var host = $(id);
     if (!host) return;
     host.innerHTML = "";
     var dates = M.dates;
     if (!dates.length) return;
-    var first = dates[0], last = dates[dates.length - 1];
-    var left = el("span", null, shortDate(first));
-    var right = el("span", null, shortDate(last));
-    host.appendChild(left);
-    host.appendChild(right);
+    var idx = [0, Math.round((dates.length - 1) / 2), dates.length - 1];
+    var seen = {};
+    for (var i = 0; i < idx.length; i++) {
+      var iso = dates[idx[i]];
+      var label = shortDate(iso);
+      if (!iso || !label || seen[iso]) continue;
+      seen[iso] = 1;
+      host.appendChild(el("span", null, label));
+    }
   }
 
   /* ── Тренировки ────────────────────────────────────────────────────── */
@@ -1307,29 +1451,20 @@
     var tag = $("training-tag");
     tag.textContent = streak ? "стрик " + plural(streak, streak + " день", streak + " дня", streak + " дней") : "";
 
+    var total = 0;
+    for (var ti = 0; ti < vals.length; ti++) if (num(vals[ti])) total++;
     var drawn = barChart($("training-chart"), {
       values: vals, height: 88,
-      label: "Тренировки по дням, 14 дней",
+      label: ariaLabel("Тренировки по дням", "отмечено " + total + " из " + vals.length),
       emptyTitle: "Тренировок нет",
       emptyText: "Отметь тренировку в вечернем чек-ине."
     });
-    if (drawn) renderBarsAxis(); else $("training-axis").innerHTML = "";
-    var total = 0;
-    for (var ti = 0; ti < vals.length; ti++) if (num(vals[ti])) total++;
+    if (drawn) renderAxis("training-axis"); else $("training-axis").innerHTML = "";
     var foot = $("training-foot");
+    var winEl = $("training-window");
+    if (winEl) winEl.textContent = seriesSpanText();
     if (total) { foot.hidden = false; $("training-total").textContent = count(total, ["тренировка", "тренировки", "тренировок"]); }
     else { foot.hidden = true; }
-  }
-
-  function renderBarsAxis() {
-    var host = $("training-axis");
-    host.innerHTML = "";
-    var n = M.series.training.length;
-    for (var i = 0; i < n; i++) {
-      var d = parseDay(M.dates[i]);
-      var sp = el("span", i === n - 1 ? "is-today" : null, d ? WEEK_LETTERS[(d.getDay() + 6) % 7] : "");
-      host.appendChild(sp);
-    }
   }
 
   /* ── Питание и вода ────────────────────────────────────────────────── */
@@ -1354,27 +1489,30 @@
     progress.setAttribute("aria-valuenow", String(Math.round(ratio * 100)));
     $("water-pct").textContent = waterAvg == null ? "" : pct(ratio) + " от цели";
 
-    // калории
+    // калории — среднее по тому же ряду, что и остальные средние карточки
     var cal = M.series.calories;
-    var sum = 0, cnt = 0;
-    for (var j = 0; j < cal.length; j++) { var c = num(cal[j]); if (c != null) { sum += c; cnt++; } }
-    var calAvg = cnt ? sum / cnt : null;
+    var calAvg = windowAvg(cal);
     var calDrawn = lineChart($("calories-chart"), {
-      values: cal, color: "#F2C9B6", fill: true, height: 72, dots: false,
+      values: cal, color: CHART.calories, fill: true, height: 76, dots: false,
       emptyTitle: "Калорий пока нет", emptyText: "Появятся из записей о еде.",
-      label: "Калории по дням"
+      label: ariaLabel("Калории по дням", (function () {
+        var v = lastValue(cal);
+        return v == null ? "нет данных" : "последнее значение " + ru(v, 0) + " ккал";
+      })())
     });
     if (calDrawn) renderAxis("calories-axis"); else $("calories-axis").innerHTML = "";
     var meta = $("calories-meta");
     if (calAvg != null) {
       meta.hidden = false;
-      $("calories-avg").textContent = ru(calAvg, 0) + " ккал в день";
+      $("calories-avg").textContent = ru(calAvg, 0) + " ккал";
     } else {
       meta.hidden = true;
     }
     if (!hasWater) {
       $("water-pct").textContent = "нет данных";
     }
+    var winEl = $("food-window");
+    if (winEl) winEl.textContent = count(avgWindow(), ["день", "дня", "дней"]);
   }
 
   /* ── Настроение и энергия ──────────────────────────────────────────── */
@@ -1392,11 +1530,13 @@
       return;
     }
 
-    var W = hostWidth(host), H = 132, padL = 24, padR = 4, padT = 10, padB = 8;
+    var W = hostWidth(host), H = 136, padL = 24, padR = 4, padT = 16, padB = 10;
     var n = Math.max(mood.length, energy.length);
     var y = yScale(1, 5, padT, H - padB);
     var x = function (idx) { return n <= 1 ? padL + (W - padL - padR) / 2 : padL + (idx / (n - 1)) * (W - padL - padR); };
-    var svg = rasterize(host, W, H, "Настроение и энергия по дням");
+    var svg = rasterize(host, W, H, ariaLabel("Настроение и энергия по дням",
+      "настроение " + (lastValue(mood) == null ? "нет данных" : ru(lastValue(mood), 1) + " из 5") +
+      ", энергия " + (lastValue(energy) == null ? "нет данных" : ru(lastValue(energy), 1) + " из 5")));
     drawGrid(svg, padL, W - padR, [1, 3, 5], y, function (v) { return ru(v, 0); });
 
     function seriesLine(values, color) {
@@ -1422,23 +1562,16 @@
         }
       }
     }
-    seriesLine(mood, "#A18BB7");
-    seriesLine(energy, "#AEDEC2");
+    seriesLine(mood, CHART.mood);
+    seriesLine(energy, CHART.energy);
     host.appendChild(svg);
-    var eSum = 0, eCnt = 0;
-    for (var ei = 0; ei < energy.length; ei++) {
-      var ev = num(energy[ei]);
-      if (ev != null) { eSum += ev; eCnt++; }
-    }
+    var energyAvg = windowAvg(energy);
     var eFoot = $("mood-foot");
-    if (eCnt) { eFoot.hidden = false; $("mood-energy").textContent = ru(eSum / eCnt, 1) + " из 5"; }
+    if (energyAvg != null) { eFoot.hidden = false; $("mood-energy").textContent = ru(energyAvg, 1) + " из 5"; }
     else { eFoot.hidden = true; }
-    if (M.dates.length) {
-      var left = el("span", null, shortDate(M.dates[0]));
-      var right = el("span", null, shortDate(M.dates[M.dates.length - 1]));
-      axis.appendChild(left);
-      axis.appendChild(right);
-    }
+    var winEl = $("mood-window");
+    if (winEl) winEl.textContent = count(avgWindow(), ["день", "дня", "дней"]);
+    renderAxis("mood-axis");
   }
 
   /* ── Привычки ──────────────────────────────────────────────────────── */
@@ -1590,6 +1723,8 @@
     var heat = M.heat;
     var weeks = heat.weeks;
     var start = heat.start;
+    cols.removeAttribute("role");
+    cols.removeAttribute("aria-label");
     if (!start) {
       totalEl.textContent = "";
       emptyInto(cols, "Нет данных", "Здесь появятся дни с записями.");
@@ -1646,14 +1781,20 @@
     }
     totalEl.textContent = total ? count(total, ["запись", "записи", "записей"]) : "нет записей";
     var bestEl = $("heat-best");
+    var bestCount = 0, bestDate = "";
+    for (var bi = 0; bi < heat.cells.length; bi++) {
+      var bc = heat.cells[bi].count;
+      if (bc != null && bc > bestCount && parseDay(heat.cells[bi].date)) { bestCount = bc; bestDate = heat.cells[bi].date; }
+    }
     if (bestEl) {
-      var bestCount = 0, bestDate = "";
-      for (var bi = 0; bi < heat.cells.length; bi++) {
-        var bc = heat.cells[bi].count;
-        if (bc != null && bc > bestCount && parseDay(heat.cells[bi].date)) { bestCount = bc; bestDate = heat.cells[bi].date; }
-      }
       bestEl.textContent = bestCount ? dayMonth(bestDate) + " · " + count(bestCount, ["запись", "записи", "записей"]) : "—";
     }
+    /* 56 квадратов не должны быть 56-ю tab-stop'ами: одна картинка с
+       текстовым итогом, а точные цифры по дням — в title при наведении */
+    cols.setAttribute("role", "img");
+    cols.setAttribute("aria-label", "Активность: " +
+      (total ? count(total, ["запись", "записи", "записей"]) + " за " + count(weeks, ["неделю", "недели", "недель"]) : "нет записей") +
+      (bestCount ? ", лучший день — " + dayMonth(bestDate) + ", " + count(bestCount, ["запись", "записи", "записей"]) : ""));
   }
 
   /* ── перерисовка графиков при изменении ширины ─────────────────────── */
