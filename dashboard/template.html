@@ -2,12 +2,13 @@
 <html lang="ru">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="light">
-<meta name="theme-color" content="#F6F7FB">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#F9F9FD">
 <meta name="robots" content="noindex, nofollow">
 <meta name="generator" content="Life OS">
 <title>{{APP_NAME}} — дашборд</title>
+<script>(function(){try{if(localStorage.getItem("lifeos-theme")==="dark"){document.documentElement.setAttribute("data-theme","dark");}}catch(e){}})();</script>
 <style>
   /* ─────────────────────────────────────────────────────────────
      Life OS · dashboard
@@ -15,15 +16,17 @@
      Токены дизайна: светлая тема, мягкие тени, пастельные акценты.
 
      Контраст мелкого текста (WCAG AA, 4.5:1) — проверенные пары:
-       --muted #656873 — 5.55:1 на #FFFFFF, 5.19:1 на #F6F7FB
-       --faint #6C6F7A — 5.01:1 на #FFFFFF, 4.68:1 на #F6F7FB
+       --muted #656873 — 5.55:1 на #FFFFFF, 5.29:1 на #F9F9FD
+       --faint #6C6F7A — 5.01:1 на #FFFFFF, 4.77:1 на #F9F9FD
+     Сайдбар (панель #F1F2FA): пункты #5E5D75 — 5.70:1, подписи
+     #6B6B79 — 4.70:1, активный текст #3F4157 на пилюле #EAE8F7 — 8.26:1.
      Текст на пастельных плашках берёт "-ink"-варианты (≥4.5:1 на своей
      плашке), а "-deep" остаются для иконок и заливок (не-текст, ≥3:1).
      Линии графиков темнее декоративных пастелей: ≥3:1 на белом —
      тонкая линия иначе не читается (WCAG 1.4.11).
      ───────────────────────────────────────────────────────────── */
   :root{
-    --bg:#F6F7FB;
+    --bg:#F9F9FD;
     --card:#FFFFFF;
     --ink:#17181C;
     --ink-2:#4B4E58;
@@ -54,7 +57,103 @@
     --r-md:14px;
     --r-sm:10px;
     --ease:cubic-bezier(.22,.61,.36,1);
+
+    /* каркас и сайдбар: панель на своём фоне (не прозрачная, не белая),
+       активный пункт — заливная пилюля мягкого лавандового */
+    --side-w:228px;
+    --side-bg:#F1F2FA;
+    --side-line:#ECEDF4;
+    --side-text:#5E5D75;
+    --side-text-2:#686777;   /* рефернсный #777785 затемнён ради AA ≥4.5:1 на плашке */
+    --side-ink:#3F4157;
+    --side-active:#EAE8F7;
+    --check-ink:#FFFFFF;     /* галочка в точке чек-ина */
+    --field:rgba(23,24,28,.035);
+    --hover:rgba(23,24,28,.045);
+    --btn-hover:#FCFCFE;
+    --body-glow-1:rgba(161,139,183,.10);
+    --body-glow-2:rgba(174,222,194,.13);
+
+    /* служебные цвета графиков (не текст): сетка, метки, заливка точек */
+    --grid:rgba(23,24,28,.055);
+    --mark:rgba(23,24,28,.18);
+    --dot-fill:#FFFFFF;
+    --bar-empty:rgba(23,24,28,.10);
+    --water-track:rgba(185,203,232,.30);
+    --water-a:#9FB7DE;
+    --water-b:#68819F;
+
+    /* данные: уровни хитмапа, категории записей, цели */
+    --heat-0:#EEF0F4; --heat-1:#E7E0EE; --heat-2:#D5C7E3; --heat-3:#BAA7CF; --heat-4:#A18BB7;
+    --heat-ring:transparent;  /* в тёмной теме клетка «0» иначе сливается с карточкой */
+    --cat-food:#F2C9B6; --cat-training:#AEDEC2; --cat-tasks:#B9CBE8; --cat-goals:#A18BB7;
+    --cat-mood:#E8C7D8; --cat-journal:#B9CBE8; --cat-sleep:#9FB7DE; --cat-water:#B9CBE8; --cat-other:#D5D8DF;
+    --goal-1:#81669E; --goal-2:#6D8CBF; --goal-3:#5F9C7C; --goal-4:#BE7E55;
   }
+
+  /* ─────────────────────────────────────────────────────────────
+     Тёмная тема: те же роли цвета, другие значения. Светлая —
+     по умолчанию; переключатель внизу сайдбара, выбор запоминается
+     в localStorage. Контраст проверен отдельно: текст ≥4.5:1 на
+     карточке #191A20, линии графиков ≥3:1 (WCAG 1.4.11).
+     ───────────────────────────────────────────────────────────── */
+  html[data-theme="dark"]{
+    color-scheme:dark;
+    --bg:#101116;
+    --card:#191A20;
+    --ink:#F3F4F8;
+    --ink-2:#C9CBD4;
+    --muted:#A6A9B4;
+    --faint:#9497A2;
+    --line:rgba(255,255,255,.075);
+    --line-2:rgba(255,255,255,.14);
+    --track:rgba(255,255,255,.09);
+
+    --violet:#B49CD0;  --violet-deep:#C9B6E3;
+    --mint:#9ED6B5;    --mint-deep:#A6D9BC;  --mint-ink:#ABDCBF;
+    --peach:#E8B79E;   --peach-deep:#E8B79E;
+    --blue:#A9C4E7;    --blue-deep:#A9C4E7;  --blue-ink:#B7CDEB;
+    --rose:#DEB4C9;    --rose-deep:#DFB6CB;  --rose-ink:#E5BFD2;
+    --sand:#D9C4A4;    --sand-deep:#D9C4A4;  --sand-ink:#E2CFB2;
+
+    --chart-ink:#A6A9B4;
+    --chart-sleep:#8FB0E8;
+    --chart-calories:#DBA37D;
+    --chart-mood:#B79DD4;
+    --chart-energy:#8CCBA9;
+    --focus:#C9B6E5;
+
+    --shadow:0 8px 24px rgba(0,0,0,.36);
+    --shadow-hover:0 16px 40px rgba(0,0,0,.5);
+
+    --side-bg:#14151B;
+    --side-line:rgba(255,255,255,.075);
+    --side-text:#A6A9B4;
+    --side-text-2:#9497A2;
+    --side-ink:#F3F4F8;
+    --side-active:#2E2B38;
+    --check-ink:#14151B;      /* на светлой заливке --violet нужна тёмная галочка */
+    --field:rgba(255,255,255,.055);
+    --hover:rgba(255,255,255,.06);
+    --btn-hover:#202128;
+    --body-glow-1:rgba(161,139,183,.14);
+    --body-glow-2:rgba(174,222,194,.05);
+
+    --grid:rgba(255,255,255,.07);
+    --mark:rgba(255,255,255,.26);
+    --dot-fill:#191A20;
+    --bar-empty:rgba(255,255,255,.12);
+    --water-track:rgba(255,255,255,.08);
+    --water-a:#7E98C9;
+    --water-b:#B9CBE8;
+
+    --heat-0:#23252B; --heat-1:#332D41; --heat-2:#4B3D60; --heat-3:#6F5A89; --heat-4:#A98FC0;
+    --heat-ring:rgba(255,255,255,.07);
+    --cat-food:#D9A486; --cat-training:#8FC7A8; --cat-tasks:#90AECE; --cat-goals:#B49CD0;
+    --cat-mood:#CFA3BC; --cat-journal:#90AECE; --cat-sleep:#8FB0E8; --cat-water:#90AECE; --cat-other:#7C7F8A;
+    --goal-1:#B79DD4; --goal-2:#8FB0E8; --goal-3:#8CCBA9; --goal-4:#DBA37D;
+  }
+  html{color-scheme:light}
 
   *,*::before,*::after{box-sizing:border-box}
   [hidden]{display:none !important}
@@ -62,8 +161,8 @@
   html,body{margin:0;padding:0}
   body{
     background:
-      radial-gradient(1100px 520px at 10% -12%, rgba(161,139,183,.10), transparent 62%),
-      radial-gradient(940px 460px at 92% -10%, rgba(174,222,194,.13), transparent 62%),
+      radial-gradient(1100px 520px at 10% -12%, var(--body-glow-1), transparent 62%),
+      radial-gradient(940px 460px at 92% -10%, var(--body-glow-2), transparent 62%),
       var(--bg);
     background-repeat:no-repeat;
     color:var(--ink);
@@ -99,26 +198,104 @@
     -webkit-tap-highlight-color:transparent;
   }
 
-  .page{max-width:1440px;margin:0 auto;padding:32px 36px 40px}
-  @media (max-width:1100px){.page{padding:24px 20px 32px}}
+  /* ── каркас: сайдбар + основная колонка ─────────────────── */
+  .app{display:grid;grid-template-columns:var(--side-w) minmax(0,1fr);min-height:100vh}
+  .main{min-width:0;width:100%;max-width:1320px;margin:0 auto;padding:24px 32px 40px}
 
-  /* ── шапка ─────────────────────────────────────────────── */
-  .topbar{display:flex;align-items:center;justify-content:space-between;gap:18px;margin-bottom:24px}
-  .brand{display:flex;align-items:center;gap:12px;min-width:0}
-  .logo{
-    width:42px;height:42px;border-radius:14px;flex:0 0 auto;
-    background:linear-gradient(145deg, rgba(161,139,183,.95), rgba(185,203,232,.9));
-    box-shadow:0 8px 18px rgba(161,139,183,.26);
-    display:grid;place-items:center;
+  /* сайдбар: 228px, на десктопе сворачивается до 76px (только иконки) */
+  .side{
+    position:sticky;top:0;z-index:30;
+    height:100vh;height:100dvh;
+    display:flex;flex-direction:column;gap:12px;
+    padding:16px 12px 12px;
+    background:var(--side-bg);
+    border-right:1px solid var(--side-line);
   }
-  .logo svg{width:22px;height:22px;display:block}
-  .brand-text{min-width:0}
+  .side-head{display:flex;align-items:center;gap:6px;padding:0 2px 4px;min-height:42px}
+  .brand{display:flex;align-items:center;gap:10px;min-width:0;flex:1;text-decoration:none;color:inherit;border-radius:12px}
+  .logo{width:42px;height:42px;flex:0 0 auto;display:grid;place-items:center}
+  .logo img{width:100%;height:100%;display:block;object-fit:contain;filter:drop-shadow(0 6px 12px rgba(111,90,134,.16))}
+  .brand-text{min-width:0;display:flex;flex-direction:column;justify-content:center;gap:1px}
   .brand h1{
-    font-size:20px;line-height:1.15;margin:0;font-weight:700;letter-spacing:-.02em;
+    margin:0;font-size:16.5px;line-height:1.15;font-weight:700;letter-spacing:-.025em;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   }
-  .brand p{margin:3px 0 0;font-size:12.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .actions{display:flex;align-items:center;gap:14px;flex:0 0 auto}
+  .brand p{margin:0;font-size:12px;color:var(--side-text-2);line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  .side-btn{
+    appearance:none;-webkit-appearance:none;border:1px solid transparent;background:transparent;
+    color:var(--side-text-2);font:inherit;width:30px;height:30px;flex:0 0 auto;cursor:pointer;
+    display:grid;place-items:center;border-radius:9px;
+    transition:background .16s var(--ease),color .16s var(--ease),border-color .16s var(--ease);
+  }
+  .side-btn svg{width:16px;height:16px;display:block}
+  @media (hover:hover) and (pointer:fine){.side-btn:hover{background:var(--hover);color:var(--ink)}}
+  .side-btn:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+  .side-close,.menu-btn{display:none}
+
+  .nav{display:flex;flex-direction:column;gap:2px;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:2px 0;scrollbar-width:none}
+  .nav::-webkit-scrollbar{width:0}
+  .nav-a{
+    display:flex;align-items:center;gap:11px;min-height:36px;padding:7px 10px;border-radius:12px;
+    color:var(--side-text);text-decoration:none;font-size:13px;font-weight:500;line-height:1.2;
+    white-space:nowrap;transition:background .16s var(--ease),color .16s var(--ease);
+  }
+  .nav-ico{width:18px;height:18px;flex:0 0 auto;display:grid;place-items:center;opacity:.78}
+  .nav-ico svg{width:18px;height:18px;display:block}
+  @media (hover:hover) and (pointer:fine){.nav-a:hover{background:var(--hover);color:var(--side-ink)}}
+  .nav-a:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+  .nav-a.is-active{background:var(--side-active);color:var(--side-ink);font-weight:600}
+  .nav-a.is-active .nav-ico{opacity:1}
+
+  .side-search{position:relative;display:flex;align-items:center}
+  .side-search > svg{position:absolute;left:10px;width:15px;height:15px;color:var(--side-text-2);pointer-events:none}
+  .side-search input{
+    appearance:none;-webkit-appearance:none;width:100%;
+    border:1px solid var(--side-line);background:var(--field);color:var(--ink);
+    font:inherit;font-size:12.5px;line-height:1.2;padding:8px 30px 8px 31px;
+    border-radius:10px;outline:none;
+    transition:border-color .16s var(--ease),box-shadow .16s var(--ease),background .16s var(--ease);
+  }
+  .side-search input::placeholder{color:var(--side-text-2)}
+  .side-search input::-webkit-search-cancel-button{display:none}
+  .side-search input:focus{border-color:var(--violet);background:var(--card);box-shadow:0 0 0 3px rgba(161,139,183,.16)}
+  .q-clear{
+    position:absolute;right:5px;width:22px;height:22px;display:none;place-items:center;
+    border:0;border-radius:6px;background:transparent;color:var(--side-text-2);font:inherit;cursor:pointer;
+  }
+  .q-clear svg{width:13px;height:13px;display:block}
+  @media (hover:hover) and (pointer:fine){.q-clear:hover{background:var(--hover);color:var(--ink)}}
+  .side-search.has-q .q-clear{display:grid}
+
+  .side-foot{
+    margin-top:auto;display:flex;flex-direction:column;gap:8px;
+    padding-top:10px;border-top:1px solid var(--side-line);
+  }
+  .chip{display:flex;align-items:center;gap:9px;min-width:0;padding:8px 9px;border-radius:12px;background:var(--field)}
+  .chip-ava{
+    width:27px;height:27px;border-radius:9px;flex:0 0 auto;display:grid;place-items:center;
+    background:rgba(161,139,183,.20);
+    color:var(--violet-deep);
+  }
+  .chip-ava svg{width:15px;height:15px;display:block}
+  .chip-text{min-width:0;line-height:1.3}
+  .chip-text b{display:block;font-size:12px;font-weight:600;color:var(--side-ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip-text span{display:block;font-size:12px;color:var(--side-text-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .side-theme{
+    appearance:none;-webkit-appearance:none;width:100%;display:flex;align-items:center;gap:9px;
+    border:1px solid transparent;background:transparent;color:var(--side-text);font:inherit;
+    font-size:12.5px;font-weight:500;padding:8px 10px;border-radius:10px;cursor:pointer;text-align:left;
+    transition:background .16s var(--ease),color .16s var(--ease);
+  }
+  .side-theme svg{width:16px;height:16px;flex:0 0 auto;color:var(--side-text-2)}
+  @media (hover:hover) and (pointer:fine){.side-theme:hover{background:var(--hover);color:var(--side-ink)}}
+  .side-theme:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+
+  /* шапка основной колонки */
+  .topbar{display:flex;align-items:center;gap:12px;min-height:36px;margin-bottom:20px}
+  .topbar .stamp{min-width:0}
+  .actions{display:flex;align-items:center;gap:10px;margin-left:auto;flex:0 0 auto}
+  .menu-btn{width:38px;height:38px;border:1px solid var(--line);background:var(--card);border-radius:11px;box-shadow:var(--shadow)}
   .stamp{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--faint);white-space:nowrap}
   .stamp .live{width:6px;height:6px;border-radius:50%;background:var(--mint-deep);box-shadow:0 0 0 3px rgba(90,143,115,.12);flex:0 0 auto}
   .btn{
@@ -132,6 +309,23 @@
   .btn svg{width:14px;height:14px;display:block;color:var(--muted);transition:transform .4s var(--ease)}
   .btn:active{transform:translateY(0);box-shadow:0 2px 6px rgba(23,24,28,.06);border-color:var(--line-2)}
   .btn:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+  html[data-theme="dark"] .btn{box-shadow:0 2px 8px rgba(0,0,0,.22)}
+  html[data-theme="dark"] .btn:active{box-shadow:0 2px 6px rgba(0,0,0,.25)}
+
+  /* тёмная тема: пастельные заливки плашек на тёмной карточке дают
+     средний тон, и светлый текст на нём не добирает AA (2.4:1).
+     Поэтому заливки становятся прозрачными, а не «светлыми». */
+  html[data-theme="dark"] .pill{background:rgba(255,255,255,.07);color:var(--muted)}
+  html[data-theme="dark"] .pill.is-active{background:rgba(180,156,208,.18);color:var(--violet-deep)}
+  html[data-theme="dark"] .pill.is-done{background:rgba(158,214,181,.16);color:var(--mint-ink)}
+  html[data-theme="dark"] .pill.is-paused{background:rgba(217,196,164,.16);color:var(--sand-ink)}
+  html[data-theme="dark"] .pill.is-failed{background:rgba(222,180,201,.16);color:var(--rose-ink)}
+  html[data-theme="dark"] .feed-cat,
+  html[data-theme="dark"] .habit-mark{background:rgba(255,255,255,.07)}
+  html[data-theme="dark"] .habit-dot{background:rgba(255,255,255,.30)}
+  html[data-theme="dark"] .slot:hover,
+  html[data-theme="dark"] .feed-item:hover,
+  html[data-theme="dark"] .habit:hover{background:rgba(255,255,255,.04)}
 
   /* ── приветствие ───────────────────────────────────────── */
   .hello{display:flex;align-items:flex-end;justify-content:space-between;gap:16px 24px;flex-wrap:wrap;margin:2px 0 22px}
@@ -143,26 +337,71 @@
     .hello h2{font-size:26px}
     .hello .sub{text-align:left;max-width:none}
   }
-  /* шапка на узком экране: бренд и действия — в две строки, подзаголовок
-     переносится по словам и обрезается двумя строками, а не по одному слову */
-  @media (max-width:620px){
-    .topbar{flex-wrap:wrap;align-items:flex-start;gap:10px 14px;row-gap:12px}
-    .actions{width:100%;justify-content:space-between;gap:10px;flex-wrap:wrap;row-gap:8px}
-    .stamp{font-size:11.5px;white-space:normal;line-height:1.35}
-    .brand p{
-      white-space:normal;line-height:1.35;
-      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+
+  /* на узком экране сайдбар — выдвижное меню, в шапке появляется кнопка */
+  .scrim{display:none}
+  @media (max-width:900px){
+    .app{display:block}
+    .main{padding:14px 16px 28px}
+    .side{
+      position:fixed;left:0;top:0;bottom:0;z-index:60;
+      width:272px;height:100dvh;
+      background:var(--side-bg);
+      border-right:1px solid var(--side-line);
+      box-shadow:0 24px 60px rgba(16,17,22,.28);
+      transform:translateX(-102%);
+      transition:transform .28s var(--ease);
     }
+    .app.nav-open .side{transform:none}
+    .side-close{display:grid}
+    .menu-btn{display:grid}
+    .scrim{
+      display:block;position:fixed;inset:0;z-index:55;background:rgba(16,17,22,.44);
+      opacity:0;visibility:hidden;transition:opacity .22s var(--ease),visibility .22s;
+    }
+    .app.nav-open ~ .scrim{opacity:1;visibility:visible}
+    body.nav-lock{overflow:hidden}
+  }
+  @media (max-width:1180px){
+    .main{padding:22px 22px 32px}
+  }
+
+  /* свёрнутый режим: 76px, только иконки; подписи остаются для скринридера */
+  @media (min-width:901px){
+    .app.is-collapsed{grid-template-columns:76px minmax(0,1fr)}
+    .app.is-collapsed .side{padding-left:9px;padding-right:9px;align-items:center}
+    .app.is-collapsed .side-head{flex-direction:column;justify-content:center;gap:6px;min-height:0;padding:0 0 2px}
+    .app.is-collapsed .brand{flex:0 0 auto}
+    .app.is-collapsed .brand-text,
+    .app.is-collapsed .nav-label,
+    .app.is-collapsed .chip-text,
+    .app.is-collapsed .theme-label{
+      position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+      clip:rect(0 0 0 0);clip-path:inset(50%);white-space:nowrap;border:0;
+    }
+    .app.is-collapsed .side-search{display:none}
+    .app.is-collapsed .nav{width:100%}
+    .app.is-collapsed .nav-a{justify-content:center;padding:8px 0;gap:0}
+    .app.is-collapsed .chip{justify-content:center;padding:6px;background:none;border-color:transparent}
+    .app.is-collapsed .side-theme{justify-content:center;padding:8px 0}
+    .app.is-collapsed .side-foot{width:100%}
+  }
+
+  @media (max-width:620px){
+    .topbar{flex-wrap:wrap;gap:8px 10px;margin-bottom:16px}
+    .stamp{font-size:11.5px;white-space:normal;line-height:1.35;flex:1 1 auto}
     .btn{padding:8px 12px}
   }
   @media (max-width:420px){
-    .page{padding:18px 14px 28px}
-    .logo{width:38px;height:38px;border-radius:12px}
-    .brand h1{font-size:18px}
-    .brand p{font-size:12px}
+    .main{padding:12px 13px 26px}
+    .brand h1{font-size:16px}
     .hello h2{font-size:23px}
     .kpis{gap:10px}
     .grid{gap:12px}
+  }
+
+  @media (prefers-reduced-motion:no-preference){
+    html{scroll-behavior:smooth}
   }
 
   /* ── KPI ───────────────────────────────────────────────── */
@@ -236,6 +475,7 @@
   }
 
   .card{
+    scroll-margin-top:18px;
     background:var(--card);border:1px solid var(--line);border-radius:var(--r-lg);
     box-shadow:var(--shadow);padding:19px 21px 20px;
     display:flex;flex-direction:column;min-width:0;position:relative;
@@ -280,7 +520,7 @@
   }
   .slot .dot{
     width:19px;height:19px;border-radius:50%;flex:0 0 auto;
-    border:1.5px solid rgba(23,24,28,.15);background:#fff;display:grid;place-items:center;
+    border:1.5px solid var(--line-2);background:var(--dot-fill);display:grid;place-items:center;
     transition:background .18s var(--ease), border-color .18s var(--ease);
   }
   .slot .dot svg{width:11px;height:11px;display:none}
@@ -297,7 +537,7 @@
   .week-dots{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
   .week-day{display:flex;flex-direction:column;align-items:center;gap:5px;min-width:0}
   .week-day b{font-size:10.5px;font-weight:500;color:var(--faint);letter-spacing:.02em}
-  .week-day i{display:block;width:100%;height:6px;border-radius:99px;background:#EEF0F4}
+  .week-day i{display:block;width:100%;height:6px;border-radius:99px;background:var(--heat-0)}
 
   /* ── цели ──────────────────────────────────────────────── */
   .goals{display:flex;flex-direction:column;gap:15px}
@@ -356,8 +596,8 @@
   .habit-name{font-size:13px;font-weight:500;color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
   .habit-when{font-size:11px;color:var(--faint);white-space:nowrap;flex:0 0 auto}
   .habit-week{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;max-width:178px;padding-left:27px}
-  .habit-week i{display:block;height:4px;border-radius:99px;background:#EEF0F4;transition:background .16s var(--ease)}
-  .habit-week i.on{background:#81669E}
+  .habit-week i{display:block;height:4px;border-radius:99px;background:var(--heat-0);transition:background .16s var(--ease)}
+  .habit-week i.on{background:var(--chart-mood)}
   .habit-streak{
     font-size:11px;font-weight:700;color:var(--violet-deep);background:rgba(161,139,183,.13);
     padding:2.5px 8px;border-radius:99px;white-space:nowrap;flex:0 0 auto;font-variant-numeric:tabular-nums;
@@ -372,7 +612,8 @@
   .heat-cols{display:flex;gap:3px;min-width:0;overflow:hidden}
   .heat-col{display:grid;grid-template-rows:repeat(7,14px);gap:3px}
   .heat-cell{
-    width:14px;height:14px;border-radius:4px;background:#EEF0F4;
+    width:14px;height:14px;border-radius:4px;background:var(--heat-0);
+    box-shadow:inset 0 0 0 1px var(--heat-ring, transparent);
     transition:transform .14s var(--ease), box-shadow .14s var(--ease);
   }
   .heat-months{position:relative;height:15px;margin-top:6px;font-size:10.5px;color:var(--faint)}
@@ -399,10 +640,10 @@
   .legend i{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;flex:0 0 auto}
 
 
-  .water-bar{height:8px;border-radius:99px;background:rgba(185,203,232,.30);overflow:hidden;margin-top:11px;position:relative}
+  .water-bar{height:8px;border-radius:99px;background:var(--water-track);overflow:hidden;margin-top:11px;position:relative}
   .water-bar > i{
     display:block;height:100%;border-radius:99px;width:0;
-    background:linear-gradient(90deg,#9FB7DE,#68819F);
+    background:linear-gradient(90deg,var(--water-a),var(--water-b));
   }
   .water-meta{display:flex;align-items:baseline;justify-content:space-between;gap:10px;font-size:11.5px;color:var(--faint);margin-top:6px}
   .water-meta b{font-weight:600;color:var(--blue-ink)}
@@ -441,9 +682,9 @@
      на тач-устройствах :hover срабатывает от тапа и остаётся
      включённым до следующего касания — там эффекты не нужны */
   @media (hover:hover) and (pointer:fine){
-    .btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(23,24,28,.09);border-color:var(--line-2);background:#FCFCFE}
+    .btn:hover{transform:translateY(-1px);box-shadow:0 8px 18px rgba(23,24,28,.09);border-color:var(--line-2);background:var(--btn-hover)}
     .btn:hover svg{transform:rotate(90deg)}
-    .card:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px);border-color:rgba(23,24,28,.085)}
+    .card:hover{box-shadow:var(--shadow-hover);transform:translateY(-1px);border-color:var(--line-2)}
     .kpi:hover{transform:translateY(-1px);box-shadow:var(--shadow-hover)}
     .slot:hover{background:rgba(23,24,28,.028)}
     .feed-item:hover{background:rgba(23,24,28,.025)}
@@ -458,9 +699,20 @@
     .btn:hover,.card:hover,.kpi:hover,.heat-cell:hover{transform:none}
     .btn:hover svg{transform:none}
   }
+  /* ── мобильный слой: без автозума в поиске, тач-отклик, безопасные зоны ── */
+  @media (pointer:coarse){
+    .side-search input{font-size:16px}
+  }
+  .nav-a,.side-btn,.btn,.q-clear,.side-theme{
+    user-select:none;-webkit-user-select:none;-webkit-touch-callout:none
+  }
+  .topbar{padding-top:env(safe-area-inset-top,0px)}
+  .side{padding-left:env(safe-area-inset-left,0px)}
   @media print{
     body{background:#fff}
-    .actions,.btn,.skip{display:none}
+    .side,.scrim,.actions,.btn,.skip,.menu-btn{display:none !important}
+    .app{display:block}
+    .main{padding:0;max-width:none}
     .card{box-shadow:none;break-inside:avoid}
     .grid{gap:12px}
   }
@@ -468,39 +720,111 @@
 </head>
 <body>
 <a class="skip" href="#main">К содержимому</a>
-<div class="page">
-  <header class="topbar">
-    <div class="brand">
-      <div class="logo" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3.2c2.4 2.9 5.2 5.1 5.2 8.7a5.2 5.2 0 1 1-10.4 0c0-3.6 2.8-5.8 5.2-8.7Z" fill="#fff" opacity=".94"/><circle cx="12" cy="16.4" r="1.6" fill="#A18BB7"/></svg>
-      </div>
-      <div class="brand-text">
-        <h1>{{APP_NAME}}</h1>
-        <p>привычки, тело, цели и мысли — в одном месте</p>
-      </div>
-    </div>
-    <div class="actions">
-      <span class="stamp" title="дата сборки данных"><span class="live" aria-hidden="true"></span>обновлено {{GENERATED_HUMAN}}</span>
-      <button class="btn" id="refresh" type="button">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.5 4.5v5h-5"/></svg>
-        Обновить
+<div class="app" id="top">
+  <aside class="side" id="side" aria-label="Меню {{APP_NAME}}">
+    <div class="side-head">
+      <a class="brand" href="#top" aria-label="{{APP_NAME}} — к обзору">
+        <span class="logo"><img src="data:image/png;base64,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" alt="" width="42" height="42"></span>
+        <span class="brand-text"><h1>{{APP_NAME}}</h1><p>твой день</p></span>
+      </a>
+      <button class="side-btn side-close" id="side-close" type="button" aria-label="Закрыть меню">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
+      <button class="side-btn side-collapse" id="side-collapse" type="button" aria-expanded="true" aria-controls="side" aria-label="Свернуть меню">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.8 6.4 9.2 12l5.6 5.6"/><path d="M19.2 6.4 13.6 12l5.6 5.6"/></svg>
       </button>
     </div>
-  </header>
 
-  <section class="hello" aria-labelledby="hello-title">
-    <div>
-      <h2 id="hello-title">Привет</h2>
-      <p class="date" id="today-date">—</p>
+    <div class="side-search" id="side-search">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M16.2 16.2 21 21"/></svg>
+      <input id="q" type="search" placeholder="Поиск по журналу" aria-label="Поиск по журналу" autocomplete="off" spellcheck="false">
+      <button class="q-clear" id="q-clear" type="button" aria-label="Очистить поиск">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+      </button>
     </div>
-    <p class="sub" id="today-sub"></p>
-  </section>
 
-  <section class="kpis" id="kpis" aria-label="Ключевые показатели"></section>
+    <nav class="nav" id="nav" aria-label="Разделы дашборда">
+      <a class="nav-a is-active" href="#top" data-section="top" title="Обзор" aria-current="location">
+        <span class="nav-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="4" width="6.4" height="6.4" rx="1.6"/><rect x="13.6" y="4" width="6.4" height="6.4" rx="1.6"/><rect x="4" y="13.6" width="6.4" height="6.4" rx="1.6"/><rect x="13.6" y="13.6" width="6.4" height="6.4" rx="1.6"/></svg></span>
+        <span class="nav-label">Обзор</span>
+      </a>
+      <a class="nav-a" href="#sec-today" data-section="sec-today" title="Сегодня">
+        <span class="nav-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M8.2 12.3l2.7 2.7 5-5.6"/></svg></span>
+        <span class="nav-label">Сегодня</span>
+      </a>
+      <a class="nav-a" href="#sec-goals" data-section="sec-goals" title="Цели">
+        <span class="nav-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.4"/><circle cx="12" cy="12" r="4.4"/><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"/></svg></span>
+        <span class="nav-label">Цели</span>
+      </a>
+      <a class="nav-a" href="#sec-sleep" data-section="sec-sleep" title="Сон">
+        <span class="nav-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.4A8.3 8.3 0 0 1 9.6 4a8.5 8.5 0 1 0 10.4 10.4Z"/></svg></span>
+        <span class="nav-label">Сон</span>
+      </a>
+      <a class="nav-a" href="#sec-train" data-section="sec-train" title="Тренировки">
+        <span class="nav-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.6l2.2-5.2 3.4 10.4 2.4-5.2H21"/></svg></span>
+        <span class="nav-label">Тренировки</span>
+      </a>
+      <a class="nav-a" href="#sec-food" data-section="sec-food" title="Питание и вода">
+        <span class="nav-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.6c3.1 3.7 5.6 6.4 5.6 9.4a5.6 5.6 0 0 1-11.2 0c0-3 2.5-5.7 5.6-9.4Z"/></svg></span>
+        <span class="nav-label">Питание</span>
+      </a>
+      <a class="nav-a" href="#sec-mood" data-section="sec-mood" title="Настроение">
+        <span class="nav-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M8.4 14.3a4.7 4.7 0 0 0 7.2 0"/><circle cx="9.4" cy="9.8" r=".9" fill="currentColor" stroke="none"/><circle cx="14.6" cy="9.8" r=".9" fill="currentColor" stroke="none"/></svg></span>
+        <span class="nav-label">Настроение</span>
+      </a>
+      <a class="nav-a" href="#sec-habits" data-section="sec-habits" title="Привычки">
+        <span class="nav-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 9.6A5.1 5.1 0 0 1 9.6 4.5h9.6"/><path d="M16.5 1.9l3 2.6-3 2.6"/><path d="M19.5 14.4a5.1 5.1 0 0 1-5.1 5.1H4.8"/><path d="M7.5 22.1l-3-2.6 3-2.6"/></svg></span>
+        <span class="nav-label">Привычки</span>
+      </a>
+      <a class="nav-a" href="#sec-journal" data-section="sec-journal" title="Журнал">
+        <span class="nav-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.2 4.6h9.2a2.6 2.6 0 0 1 2.6 2.6v12.2H8.8a2.6 2.6 0 0 1-2.6-2.6V4.6Z"/><path d="M9.6 8.8h5.2"/><path d="M9.6 12.2h5.2"/><path d="M6.2 4.6v12.2"/></svg></span>
+        <span class="nav-label">Журнал</span>
+      </a>
+      <a class="nav-a" href="#sec-heat" data-section="sec-heat" title="Активность">
+        <span class="nav-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 19.5V13"/><path d="M9.3 19.5V6.5"/><path d="M14.7 19.5v-9"/><path d="M20 19.5V9"/></svg></span>
+        <span class="nav-label">Активность</span>
+      </a>
+    </nav>
+
+    <div class="side-foot">
+      <div class="chip">
+        <span class="chip-ava" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3.8l1.9 5.3 5.3 1.9-5.3 1.9L12 18.2l-1.9-5.3L4.8 11l5.3-1.9Z" fill="currentColor" opacity=".82"/><circle cx="18.4" cy="5.6" r="1.3" fill="currentColor" opacity=".5"/></svg></span>
+        <span class="chip-text"><b id="chip-streak">пока без серии</b><span>всё локально</span></span>
+      </div>
+      <button class="side-theme" id="theme" type="button" aria-pressed="false" aria-label="Включить тёмную тему">
+        <span id="theme-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.4A8.3 8.3 0 0 1 9.6 4a8.5 8.5 0 1 0 10.4 10.4Z"/></svg></span>
+        <span class="theme-label" id="theme-label">Тёмная тема</span>
+      </button>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="side-btn menu-btn" id="menu-btn" type="button" aria-label="Открыть меню" aria-expanded="false" aria-controls="side">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+      </button>
+      <span class="stamp" title="дата сборки данных"><span class="live" aria-hidden="true"></span>обновлено {{GENERATED_HUMAN}}</span>
+      <div class="actions">
+        <button class="btn" id="refresh" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.5 4.5v5h-5"/></svg>
+          Обновить
+        </button>
+      </div>
+    </header>
+
+    <section class="hello" aria-labelledby="hello-title">
+      <div>
+        <h2 id="hello-title">Привет</h2>
+        <p class="date" id="today-date">—</p>
+      </div>
+      <p class="sub" id="today-sub"></p>
+    </section>
+
+    <section class="kpis" id="kpis" aria-label="Ключевые показатели"></section>
 
   <main class="grid" id="main" tabindex="-1">
     <!-- Сегодня -->
-    <section class="card card--today" aria-labelledby="h-today">
+    <section class="card card--today" id="sec-today" aria-labelledby="h-today">
       <div class="card-head">
         <div class="card-title">
           <span class="card-ico ico-mint" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M8.2 12.3l2.7 2.7 5-5.6"/></svg></span>
@@ -518,7 +842,7 @@
     </section>
 
     <!-- Цели -->
-    <section class="card card--goals" aria-labelledby="h-goals">
+    <section class="card card--goals" id="sec-goals" aria-labelledby="h-goals">
       <div class="card-head">
         <div class="card-title">
           <span class="card-ico ico-violet" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="8.4"/><circle cx="12" cy="12" r="4.4"/><circle cx="12" cy="12" r="1.1" fill="currentColor" stroke="none"/></svg></span>
@@ -530,7 +854,7 @@
     </section>
 
     <!-- Сон -->
-    <section class="card card--sleep" aria-labelledby="h-sleep">
+    <section class="card card--sleep" id="sec-sleep" aria-labelledby="h-sleep">
       <div class="card-head">
         <div class="card-title">
           <span class="card-ico ico-blue" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.4A8.3 8.3 0 0 1 9.6 4a8.5 8.5 0 1 0 10.4 10.4Z"/></svg></span>
@@ -550,7 +874,7 @@
     </section>
 
     <!-- Тренировки -->
-    <section class="card card--train" aria-labelledby="h-train">
+    <section class="card card--train" id="sec-train" aria-labelledby="h-train">
       <div class="card-head">
         <div class="card-title">
           <span class="card-ico ico-mint" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h3.6l2.2-5.2 3.4 10.4 2.4-5.2H21"/></svg></span>
@@ -569,7 +893,7 @@
     </section>
 
     <!-- Питание и вода -->
-    <section class="card card--food" aria-labelledby="h-food">
+    <section class="card card--food" id="sec-food" aria-labelledby="h-food">
       <div class="card-head">
         <div class="card-title">
           <span class="card-ico ico-peach" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.6c3.1 3.7 5.6 6.4 5.6 9.4a5.6 5.6 0 0 1-11.2 0c0-3 2.5-5.7 5.6-9.4Z"/></svg></span>
@@ -591,7 +915,7 @@
     </section>
 
     <!-- Настроение и энергия -->
-    <section class="card card--mood" aria-labelledby="h-mood">
+    <section class="card card--mood" id="sec-mood" aria-labelledby="h-mood">
       <div class="card-head">
         <div class="card-title">
           <span class="card-ico ico-rose" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.6"/><path d="M8.4 14.3a4.7 4.7 0 0 0 7.2 0"/><circle cx="9.4" cy="9.8" r=".9" fill="currentColor" stroke="none"/><circle cx="14.6" cy="9.8" r=".9" fill="currentColor" stroke="none"/></svg></span>
@@ -601,8 +925,8 @@
       </div>
       <div class="card-body">
         <div class="legend">
-          <span><i style="background:#81669E"></i>настроение</span>
-          <span><i style="background:#5F9C7C"></i>энергия</span>
+          <span><i style="background:var(--chart-mood)"></i>настроение</span>
+          <span><i style="background:var(--chart-energy)"></i>энергия</span>
         </div>
         <div class="chart-cap"><span>оценка, 1–5</span></div>
         <div id="mood-chart"></div>
@@ -612,7 +936,7 @@
     </section>
 
     <!-- Привычки -->
-    <section class="card card--habits" aria-labelledby="h-habits">
+    <section class="card card--habits" id="sec-habits" aria-labelledby="h-habits">
       <div class="card-head">
         <div class="card-title">
           <span class="card-ico ico-violet" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 9.6A5.1 5.1 0 0 1 9.6 4.5h9.6"/><path d="M16.5 1.9l3 2.6-3 2.6"/><path d="M19.5 14.4a5.1 5.1 0 0 1-5.1 5.1H4.8"/><path d="M7.5 22.1l-3-2.6 3-2.6"/></svg></span>
@@ -624,7 +948,7 @@
     </section>
 
     <!-- Журнал -->
-    <section class="card card--journal" aria-labelledby="h-journal">
+    <section class="card card--journal" id="sec-journal" aria-labelledby="h-journal">
       <div class="card-head">
         <div class="card-title">
           <span class="card-ico ico-blue" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.2 4.6h9.2a2.6 2.6 0 0 1 2.6 2.6v12.2H8.8a2.6 2.6 0 0 1-2.6-2.6V4.6Z"/><path d="M9.6 8.8h5.2"/><path d="M9.6 12.2h5.2"/><path d="M6.2 4.6v12.2"/></svg></span>
@@ -636,7 +960,7 @@
     </section>
 
     <!-- Хитмап -->
-    <section class="card card--heat" aria-labelledby="h-heat">
+    <section class="card card--heat" id="sec-heat" aria-labelledby="h-heat">
       <div class="card-head">
         <div class="card-title">
           <span class="card-ico ico-sand" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="4" y="4" width="6.4" height="6.4" rx="1.6"/><rect x="13.6" y="4" width="6.4" height="6.4" rx="1.6"/><rect x="4" y="13.6" width="6.4" height="6.4" rx="1.6"/><rect x="13.6" y="13.6" width="6.4" height="6.4" rx="1.6"/></svg></span>
@@ -654,11 +978,11 @@
         </div>
         <div class="heat-legend">
           <span>меньше</span>
-          <span class="heat-cell" style="background:#EEF0F4"></span>
-          <span class="heat-cell" style="background:#E7E0EE"></span>
-          <span class="heat-cell" style="background:#D5C7E3"></span>
-          <span class="heat-cell" style="background:#BAA7CF"></span>
-          <span class="heat-cell" style="background:#A18BB7"></span>
+          <span class="heat-cell" style="background:var(--heat-0)"></span>
+          <span class="heat-cell" style="background:var(--heat-1)"></span>
+          <span class="heat-cell" style="background:var(--heat-2)"></span>
+          <span class="heat-cell" style="background:var(--heat-3)"></span>
+          <span class="heat-cell" style="background:var(--heat-4)"></span>
           <span>больше</span>
           <span class="spacer"></span>
           <span class="total" id="heat-total"></span>
@@ -666,20 +990,22 @@
         <div class="card-foot"><span>лучший день</span><b id="heat-best">—</b></div>
       </div>
     </section>
-  </main>
+    </main>
 
-  <footer>
-    <span class="foot-left">
-      <span>{{APP_NAME}}</span><span class="foot-dot" aria-hidden="true"></span>
-      <span>данные из Obsidian и Telegram-агента</span><span class="foot-dot" aria-hidden="true"></span>
-      <span>© {{GENERATED_YEAR}}</span>
-    </span>
-    <span class="foot-right">
-      <span>сгенерировано {{GENERATED_HUMAN}}</span>
-      <span class="iso">{{GENERATED_AT}}</span>
-    </span>
-  </footer>
+    <footer>
+      <span class="foot-left">
+        <span>{{APP_NAME}}</span><span class="foot-dot" aria-hidden="true"></span>
+        <span>данные из Obsidian и Telegram-агента</span><span class="foot-dot" aria-hidden="true"></span>
+        <span>© {{GENERATED_YEAR}}</span>
+      </span>
+      <span class="foot-right">
+        <span>сгенерировано {{GENERATED_HUMAN}}</span>
+        <span class="iso">{{GENERATED_AT}}</span>
+      </span>
+    </footer>
+  </div>
 </div>
+<div class="scrim" id="scrim" aria-hidden="true"></div>
 
 <script>window.LIFEOS_DATA = {{LIFEOS_DATA}};</script>
 <script>
@@ -695,22 +1021,50 @@
     food: "еда", training: "тренировка", tasks: "задачи", goals: "цели",
     mood: "настроение", journal: "мысли", sleep: "сон", water: "вода", other: "заметка"
   };
+  /* Цвета — ссылки на токены темы: при переключении светлой/тёмной
+     они меняются без перерисовки DOM, а графики перерисовываются. */
   var CAT_COLOR = {
-    food: "#F2C9B6", training: "#AEDEC2", tasks: "#B9CBE8", goals: "#A18BB7",
-    mood: "#E8C7D8", journal: "#B9CBE8", sleep: "#9FB7DE", water: "#B9CBE8", other: "#D5D8DF"
+    food: "var(--cat-food)", training: "var(--cat-training)", tasks: "var(--cat-tasks)",
+    goals: "var(--cat-goals)", mood: "var(--cat-mood)", journal: "var(--cat-journal)",
+    sleep: "var(--cat-sleep)", water: "var(--cat-water)", other: "var(--cat-other)"
   };
-  /* полоски прогресса — тоже данные: держим ≥3:1 на белом */
-  var GOAL_COLORS = ["#81669E", "#6D8CBF", "#5F9C7C", "#BE7E55"];
+  /* полоски прогресса — тоже данные: в светлой теме ≥3:1 на белом */
+  var GOAL_COLORS = ["var(--goal-1)", "var(--goal-2)", "var(--goal-3)", "var(--goal-4)"];
   var WATER_GOAL_ML = 2000;
-  /* Линии графиков темнее пастельных акцентов: тонкая линия на белой
-     карточке должна держать ≥3:1 (WCAG 1.4.11), иначе она «исчезает». */
+  /* Линии графиков темнее пастельных акцентов: тонкая линия на карточке
+     должна держать ≥3:1 (WCAG 1.4.11), иначе она «исчезает». Значения
+     берём из CSS-переменных при отрисовке: у тёмной темы свои. */
   var CHART = {
     sleep: "#6D8CBF",
     calories: "#BE7E55",
     mood: "#81669E",
     energy: "#5F9C7C"
   };
+  var PAL = {
+    grid: "rgba(23,24,28,.055)",
+    mark: "rgba(23,24,28,.18)",
+    dot: "#FFFFFF",
+    barEmpty: "rgba(23,24,28,.10)"
+  };
+  function cssVar(name, fallback) {
+    try {
+      var v = getComputedStyle(document.documentElement).getPropertyValue(name);
+      v = v ? v.trim() : "";
+      return v || fallback;
+    } catch (e) { return fallback; }
+  }
+  function syncPalette() {
+    CHART.sleep = cssVar("--chart-sleep", CHART.sleep);
+    CHART.calories = cssVar("--chart-calories", CHART.calories);
+    CHART.mood = cssVar("--chart-mood", CHART.mood);
+    CHART.energy = cssVar("--chart-energy", CHART.energy);
+    PAL.grid = cssVar("--grid", PAL.grid);
+    PAL.mark = cssVar("--mark", PAL.mark);
+    PAL.dot = cssVar("--dot-fill", PAL.dot);
+    PAL.barEmpty = cssVar("--bar-empty", PAL.barEmpty);
+  }
   var WEEK_LETTERS = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
+  var query = "";  /* поиск по журналу из сайдбара */
   var EMPTY_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.6"/><path d="M12 8.2v4.4"/><circle cx="12" cy="16" r=".9" fill="currentColor" stroke="none"/></svg>';
 
   /* ── утилиты ───────────────────────────────────────────────────────── */
@@ -1073,7 +1427,9 @@
       if (done) doneCount++;
       var row = el("div", "slot" + (done ? " done" : ""));
       var dot = el("div", "dot");
-      dot.innerHTML = '<svg viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M1.7 5.2 4 7.5 8.4 2.5" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+      /* цвет галочки — из токена: в тёмной теме заливка светлее,
+         белая галочка на ней теряется (2.44:1 < 3:1) */
+      dot.innerHTML = '<svg viewBox="0 0 10 10" fill="none" aria-hidden="true"><path d="M1.7 5.2 4 7.5 8.4 2.5" style="stroke:var(--check-ink);stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round"/></svg>';
       row.appendChild(dot);
       row.appendChild(el("span", "name", SLOT_LABEL[slot]));
       row.appendChild(el("span", "flag", done ? "заполнено" : "—"));
@@ -1229,7 +1585,7 @@
       var yy = y(ticks[i]);
       svg.appendChild(svgEl("line", {
         x1: x0, x2: x1, y1: yy, y2: yy,
-        stroke: "rgba(23,24,28,.055)", "stroke-width": 1
+        stroke: PAL.grid, "stroke-width": 1
       }));
       if (fmt) {
         var t = svgEl("text", { x: 0, y: yy - 4, "text-anchor": "start" });
@@ -1291,7 +1647,7 @@
       var my = y(opts.mark);
       svg.appendChild(svgEl("line", {
         x1: padL, x2: W - padR, y1: my, y2: my,
-        stroke: "rgba(23,24,28,.18)", "stroke-width": 1, "stroke-dasharray": "3 4"
+        stroke: PAL.mark, "stroke-width": 1, "stroke-dasharray": "3 4"
       }));
       if (opts.markLabel) {
         var ml = svgEl("text", { x: W - padR, y: my - 4, "text-anchor": "end" });
@@ -1329,14 +1685,14 @@
       for (var q = 0; q < seg.length; q++) {
         var p = seg[q];
         if (opts.dots === false) continue;
-        svg.appendChild(svgEl("circle", { cx: p.x, cy: p.y, r: 2.7, fill: "#fff", stroke: opts.color, "stroke-width": 1.9 }));
+        svg.appendChild(svgEl("circle", { cx: p.x, cy: p.y, r: 2.7, fill: PAL.dot, stroke: opts.color, "stroke-width": 1.9 }));
       }
     }
     // акцент на последней точке
     var last = pts[pts.length - 1];
     var lx = x(last.i), ly = y(last.v);
     svg.appendChild(svgEl("circle", { cx: lx, cy: ly, r: 7, fill: opts.color, opacity: .14 }));
-    svg.appendChild(svgEl("circle", { cx: lx, cy: ly, r: 3.4, fill: "#fff", stroke: opts.color, "stroke-width": 2.2 }));
+    svg.appendChild(svgEl("circle", { cx: lx, cy: ly, r: 3.4, fill: PAL.dot, stroke: opts.color, "stroke-width": 2.2 }));
 
     host.appendChild(svg);
     return true;
@@ -1365,7 +1721,7 @@
       svg.appendChild(svgEl("rect", {
         x: xx.toFixed(1), y: yy.toFixed(1), width: bw.toFixed(1), height: (on ? bh : 4).toFixed(1),
         rx: Math.min(6, bw / 2),
-        fill: on ? (isLast ? CHART.mood : CHART.energy) : "rgba(23,24,28,.10)"
+        fill: on ? (isLast ? CHART.mood : CHART.energy) : PAL.barEmpty
       }));
     }
     host.appendChild(svg);
@@ -1558,7 +1914,7 @@
           }));
         }
         for (var q = 0; q < seg.length; q++) {
-          svg.appendChild(svgEl("circle", { cx: seg[q].x, cy: seg[q].y, r: 2.6, fill: "#fff", stroke: color, "stroke-width": 1.9 }));
+          svg.appendChild(svgEl("circle", { cx: seg[q].x, cy: seg[q].y, r: 2.6, fill: PAL.dot, stroke: color, "stroke-width": 1.9 }));
         }
       }
     }
@@ -1663,19 +2019,43 @@
     return shortDate(iso);
   }
 
+  function feedMatches() {
+    var needle = query.trim().toLowerCase();
+    if (!needle) return M.feed;
+    var out = [];
+    for (var i = 0; i < M.feed.length; i++) {
+      var f = M.feed[i];
+      var cat = CAT_LABEL[f.category] || "";
+      var hay = String(f.text || "") + " " + cat + " " + String(f.category || "");
+      if (hay.toLowerCase().indexOf(needle) !== -1) out.push(f);
+    }
+    return out;
+  }
+
   function renderFeed() {
     var box = $("feed");
     var tag = $("feed-tag");
+    var items = feedMatches();
+    var needle = query.trim();
     box.innerHTML = "";
-    if (!M.feed.length) {
-      tag.textContent = "последние записи";
-      emptyInto(box, "Записей пока нет", "Поговори с агентом в Telegram — записи появятся здесь.");
+    if (!items.length) {
+      if (needle) {
+        tag.textContent = "ничего не нашлось";
+        emptyInto(box, "Ничего не нашлось",
+          "Поиск идёт по тексту записей журнала. Попробуй другое слово или очисти строку.");
+      } else {
+        tag.textContent = "последние записи";
+        emptyInto(box, "Записей пока нет", "Поговори с агентом в Telegram — записи появятся здесь.");
+      }
       return;
     }
-    var shown = M.feed.slice(0, 4);
-    tag.textContent = M.feed.length > shown.length
-      ? "последние " + shown.length
-      : count(M.feed.length, ["запись", "записи", "записей"]);
+    var limit = needle ? 12 : 4;
+    var shown = items.slice(0, limit);
+    tag.textContent = needle
+      ? "найдено " + ru(items.length, 0)
+      : (items.length > shown.length
+        ? "последние " + shown.length
+        : count(items.length, ["запись", "записи", "записей"]));
     for (var i = 0; i < shown.length; i++) {
       var f = shown[i];
       var item = el("div", "feed-item");
@@ -1707,11 +2087,11 @@
 
   /* ── Хитмап ────────────────────────────────────────────────────────── */
   function heatColor(c) {
-    if (!c) return "#EEF0F4";
-    if (c === 1) return "#E7E0EE";
-    if (c === 2) return "#D5C7E3";
-    if (c === 3) return "#BAA7CF";
-    return "#A18BB7";
+    if (!c) return "var(--heat-0)";
+    if (c === 1) return "var(--heat-1)";
+    if (c === 2) return "var(--heat-2)";
+    if (c === 3) return "var(--heat-3)";
+    return "var(--heat-4)";
   }
 
   function renderHeatmap() {
@@ -1797,6 +2177,324 @@
       (bestCount ? ", лучший день — " + dayMonth(bestDate) + ", " + count(bestCount, ["запись", "записи", "записей"]) : ""));
   }
 
+  /* ── сайдбар: разделы, поиск, тема, свёрнутый режим ────────────────── */
+  var THEME_KEY = "lifeos-theme";
+  var COLLAPSE_KEY = "lifeos-side-collapsed";
+  var MOON_PATHS = '<path d="M20 14.4A8.3 8.3 0 0 1 9.6 4a8.5 8.5 0 1 0 10.4 10.4Z"/>';
+  var SUN_PATHS = '<circle cx="12" cy="12" r="4.2"/><path d="M12 2.6v2.4M12 19v2.4M2.6 12h2.4M19 12h2.4M5.1 5.1l1.7 1.7M17.2 17.2l1.7 1.7M18.9 5.1l-1.7 1.7M6.8 17.2l-1.7 1.7"/>';
+  var CHEV_LEFT = '<path d="M14.8 6.4 9.2 12l5.6 5.6"/><path d="M19.2 6.4 13.6 12l5.6 5.6"/>';
+  var CHEV_RIGHT = '<path d="M9.2 6.4 14.8 12l-5.6 5.6"/><path d="M4.8 6.4 10.4 12l-5.6 5.6"/>';
+  var app = document.querySelector(".app");
+  var navLinks = [];
+  var lastFocus = null;
+
+  function iconSvg(paths) {
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" ' +
+      'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + paths + '</svg>';
+  }
+  function isDark() {
+    return document.documentElement.getAttribute("data-theme") === "dark";
+  }
+  function isNarrow() {
+    return !!(window.matchMedia && window.matchMedia("(max-width: 900px)").matches);
+  }
+  function prefersReducedMotion() {
+    return !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+  }
+  function updateThemeUi() {
+    var dark = isDark();
+    var btn = $("theme");
+    if (btn) {
+      btn.setAttribute("aria-pressed", dark ? "true" : "false");
+      btn.setAttribute("aria-label", dark ? "Включить светлую тему" : "Включить тёмную тему");
+    }
+    var label = $("theme-label");
+    if (label) label.textContent = dark ? "Светлая тема" : "Тёмная тема";
+    var ico = $("theme-ico");
+    if (ico) ico.innerHTML = iconSvg(dark ? SUN_PATHS : MOON_PATHS);
+    var meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", dark ? "#101116" : "#F9F9FD");
+  }
+  function applyTheme(dark, persist) {
+    var root = document.documentElement;
+    if (dark) root.setAttribute("data-theme", "dark");
+    else root.removeAttribute("data-theme");
+    if (persist) {
+      try { localStorage.setItem(THEME_KEY, dark ? "dark" : "light"); } catch (e) {}
+    }
+    updateThemeUi();
+    syncPalette();
+    try { renderCharts(); } catch (e) { warn(e); }
+  }
+  function toggleTheme() { applyTheme(!isDark(), true); }
+
+  function openNav() {
+    if (!app) return;
+    lastFocus = document.activeElement;
+    app.classList.add("nav-open");
+    document.body.classList.add("nav-lock");
+    var btn = $("menu-btn");
+    if (btn) btn.setAttribute("aria-expanded", "true");
+    var close = $("side-close");
+    if (close) { try { close.focus(); } catch (e) {} }
+  }
+  function closeNav(restoreFocus) {
+    if (!app) return;
+    app.classList.remove("nav-open");
+    document.body.classList.remove("nav-lock");
+    var btn = $("menu-btn");
+    if (btn) btn.setAttribute("aria-expanded", "false");
+    if (restoreFocus && lastFocus && lastFocus.focus) {
+      try { lastFocus.focus(); } catch (e) {}
+    }
+  }
+  function setCollapsed(on, persist) {
+    if (!app) return;
+    app.classList.toggle("is-collapsed", !!on);
+    var btn = $("side-collapse");
+    if (btn) {
+      btn.setAttribute("aria-expanded", on ? "false" : "true");
+      btn.setAttribute("aria-label", on ? "Развернуть меню" : "Свернуть меню");
+      btn.innerHTML = iconSvg(on ? CHEV_RIGHT : CHEV_LEFT);
+    }
+    if (persist) {
+      try { localStorage.setItem(COLLAPSE_KEY, on ? "1" : "0"); } catch (e) {}
+    }
+    window.setTimeout(function () { try { renderCharts(); } catch (e) { warn(e); } }, 340);
+  }
+  function focusSearch() {
+    if (!app) return;
+    if (isNarrow() && !app.classList.contains("nav-open")) openNav();
+    if (app.classList.contains("is-collapsed")) setCollapsed(false, true);
+    var input = $("q");
+    if (input) { try { input.focus(); input.select(); } catch (e) {} }
+  }
+
+  /* ── навигация по разделам одной страницы.
+     Все карточки на месте: пункт меню прокручивает к своей секции, а
+     подсветка следует за прокруткой. Активной становится секция, чья
+     карточка последней пересекла «линию чтения» (22% высоты окна):
+     наверху страницы это всегда «Обзор», внизу — реально видимая
+     секция, а не принудительно последняя (так было в черновике).
+     После клика подсветка сразу переходит на выбранный пункт и
+     держится, пока карточка не ушла выше экрана — иначе длинный
+     дашборд откатывал бы её назад во время плавной прокрутки. */
+  var READ_LINE_RATIO = 0.22;
+  var pinned = null;
+
+  function setActiveLink(link) {
+    for (var i = 0; i < navLinks.length; i++) {
+      var l = navLinks[i];
+      if (l === link) {
+        l.classList.add("is-active");
+        l.setAttribute("aria-current", "location");
+      } else {
+        l.classList.remove("is-active");
+        l.removeAttribute("aria-current");
+      }
+    }
+  }
+  function linkOf(name) {
+    for (var i = 0; i < navLinks.length; i++) {
+      if (navLinks[i].getAttribute("data-section") === name) return navLinks[i];
+    }
+    return null;
+  }
+  function sectionNode(name) {
+    return (name && name !== "top") ? document.getElementById(name) : null;
+  }
+  function viewportHeight() {
+    return window.innerHeight || document.documentElement.clientHeight || 0;
+  }
+  function scrollOffset() {
+    return window.pageYOffset || document.documentElement.scrollTop || 0;
+  }
+  function motionBehavior() {
+    return prefersReducedMotion() ? "auto" : "smooth";
+  }
+  function updateActiveLink() {
+    if (!navLinks.length) return;
+    var y = scrollOffset();
+    if (y < 12 && !pinned) {            /* верх страницы без клика — «Обзор» */
+      setActiveLink(navLinks[0]);
+      return;
+    }
+    if (pinned) {                        /* держим выбранный пункт, пока видна его карточка */
+      var pnode = sectionNode(pinned);
+      if (pnode) {
+        var pr = pnode.getBoundingClientRect();
+        if (pr.bottom > 0) { setActiveLink(linkOf(pinned)); return; }
+      }
+      pinned = null;
+    }
+    var vh = viewportHeight();
+    var docH = document.documentElement.scrollHeight || 0;
+    if (y > 0 && docH - (y + vh) < 4) {
+      /* низ страницы: последний ряд карточек может не дойти до линии
+         чтения, поэтому подсвечиваем последнюю секцию, а не «ничего» */
+      setActiveLink(navLinks[navLinks.length - 1]);
+      return;
+    }
+    var line = Math.max(88, Math.round(vh * READ_LINE_RATIO));
+    var best = null, bestTop = -Infinity;
+    for (var i = 1; i < navLinks.length; i++) {   /* 0 — «Обзор» (верх) */
+      var node = sectionNode(navLinks[i].getAttribute("data-section"));
+      if (!node) continue;
+      var top = node.getBoundingClientRect().top;
+      /* строгое «>»: из карточек одного ряда активна первая (левая);
+         на узком экране ряды разъезжаются и подсвечиваются все секции */
+      if (top <= line && top > bestTop) { bestTop = top; best = navLinks[i]; }
+    }
+    setActiveLink(best || navLinks[0]);
+  }
+  function jumpTo(name) {
+    var node = sectionNode(name);
+    var top = node ? Math.max(0, node.getBoundingClientRect().top + scrollOffset() - 18) : 0;
+    pinned = name === "top" ? null : name;
+    var link = linkOf(name);
+    if (link) setActiveLink(link);
+    try {
+      window.scrollTo({ top: top, behavior: motionBehavior() });
+    } catch (e) {
+      window.scrollTo(0, top);          /* движок без опций прокрутки */
+    }
+  }
+  function navigate(name) {
+    var hash = "#" + name;
+    if (hash !== location.hash) {
+      try {
+        history.pushState(null, "", hash);   /* своя запись истории — «назад» вернёт раздел */
+      } catch (e) {
+        location.hash = name;                /* hashchange ниже прокрутит и подсветит */
+        return;
+      }
+    }
+    jumpTo(name);
+  }
+  function restoreHash() {
+    var raw = (location.hash || "").replace(/^#/, "");
+    if (raw === "top") {
+      try { window.scrollTo(0, 0); } catch (e) {}
+      updateActiveLink();
+      return;
+    }
+    if (linkOf(raw)) { jumpTo(raw); return; }
+    updateActiveLink();
+  }
+  var scrollTick = false;
+  function onScroll() {
+    if (scrollTick) return;
+    scrollTick = true;
+    if (window.requestAnimationFrame) {
+      window.requestAnimationFrame(function () { scrollTick = false; updateActiveLink(); });
+    } else {
+      window.setTimeout(function () { scrollTick = false; updateActiveLink(); }, 60);
+    }
+  }
+
+  function initSidebar() {
+    var list = document.querySelectorAll(".nav-a");
+    for (var i = 0; i < list.length; i++) navLinks.push(list[i]);
+
+    var collapseBtn = $("side-collapse");
+    if (collapseBtn) collapseBtn.addEventListener("click", function () {
+      setCollapsed(!app.classList.contains("is-collapsed"), true);
+    });
+    var menuBtn = $("menu-btn");
+    if (menuBtn) menuBtn.addEventListener("click", openNav);
+    var closeBtn = $("side-close");
+    if (closeBtn) closeBtn.addEventListener("click", function () { closeNav(true); });
+    var scrim = $("scrim");
+    if (scrim) scrim.addEventListener("click", function () { closeNav(true); });
+
+    for (var j = 0; j < navLinks.length; j++) {
+      navLinks[j].addEventListener("click", function (e) {
+        e.preventDefault();
+        if (isNarrow()) closeNav(false);   /* на телефоне сначала закрываем drawer */
+        navigate(this.getAttribute("data-section") || "top");
+      });
+    }
+
+    if (app) {
+      try {
+        if (localStorage.getItem(COLLAPSE_KEY) === "1" && !isNarrow()) setCollapsed(true, false);
+      } catch (e) {}
+    }
+
+    var input = $("q");
+    var clear = $("q-clear");
+    var wrap = $("side-search");
+    function setQuery(value) {
+      query = value || "";
+      if (input && input.value !== query) input.value = query;
+      if (wrap) wrap.classList.toggle("has-q", !!query);
+      try { renderFeed(); } catch (e) { warn(e); }
+    }
+    if (input) {
+      input.addEventListener("input", function () { setQuery(input.value); });
+      input.addEventListener("keydown", function (e) {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          setQuery("");
+          input.blur();
+        } else if (e.key === "Enter") {
+          e.preventDefault();
+          if (isNarrow()) closeNav(false);
+          navigate("sec-journal");   /* Enter — к найденным записям журнала */
+        }
+      });
+    }
+    if (clear) clear.addEventListener("click", function () {
+      setQuery("");
+      if (input) input.focus();
+    });
+
+    var themeBtn = $("theme");
+    if (themeBtn) themeBtn.addEventListener("click", toggleTheme);
+
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && app && app.classList.contains("nav-open")) {
+        closeNav(true);
+        return;
+      }
+      var target = e.target || {};
+      var tag = String(target.tagName || "").toLowerCase();
+      var typing = tag === "input" || tag === "textarea" || tag === "select" || target.isContentEditable;
+      if (typing) return;
+      if ((e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        focusSearch();
+      } else if (e.key === "/") {
+        e.preventDefault();
+        focusSearch();
+      }
+    });
+
+    window.addEventListener("popstate", restoreHash);
+    window.addEventListener("hashchange", restoreHash);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    /* ручная прокрутка (колесо/палец) снимает «закрепление» после клика:
+       подсветка снова следует за тем, что человек читает */
+    window.addEventListener("wheel", function () { pinned = null; }, { passive: true });
+    window.addEventListener("touchmove", function () { pinned = null; }, { passive: true });
+    window.addEventListener("resize", function () {
+      if (!isNarrow() && app && app.classList.contains("nav-open")) closeNav(false);
+      updateActiveLink();
+    }, { passive: true });
+
+    updateThemeUi();
+    updateActiveLink();
+  }
+
+  function renderChip() {
+    var host = $("chip-streak");
+    if (!host) return;
+    var n = M.kpis.streak;
+    host.textContent = n
+      ? count(n, ["день подряд", "дня подряд", "дней подряд"])
+      : "пока без серии";
+  }
+
   /* ── перерисовка графиков при изменении ширины ─────────────────────── */
   var lastWidth = 0;
   function renderCharts() {
@@ -1825,14 +2523,21 @@
     var btn = $("refresh");
     if (btn) btn.addEventListener("click", function () { location.reload(); });
 
+    syncPalette();
+    initSidebar();
+
     try { renderToday(); } catch (e) { warn(e); }
     try { renderKpis(); } catch (e) { warn(e); }
+    try { renderChip(); } catch (e) { warn(e); }
     try { renderGoals(); } catch (e) { warn(e); }
     try { renderHabits(); } catch (e) { warn(e); }
     try { renderFeed(); } catch (e) { warn(e); }
     try { renderHeatmap(); } catch (e) { warn(e); }
     renderCharts();
     lastWidth = document.documentElement.clientWidth;
+    /* активный пункт считаем ТОЛЬКО после отрисовки карточек: до неё
+       высоты секций нулевые и любая эвристика попадает в «низ страницы» */
+    restoreHash();
 
     if (window.addEventListener) {
       window.addEventListener("resize", scheduleResize, { passive: true });
