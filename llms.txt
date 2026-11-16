@@ -1,0 +1,65 @@
+# Life OS
+
+> Life OS 0.1.1 — локальный ассистент для macOS: Telegram-бот сам задаёт вопросы
+> о дне, еде, тренировках и целях, складывает ответы в Obsidian и собирает
+> офлайн-дашборд. Публичного сайта и облака нет.
+>
+> Карта репозитория для ИИ-агентов и людей, которые читают впервые.
+> Срез: 17.11.2026.
+
+## Что это
+
+- Один пользователь, один разрешённый `chat_id`; бот пишет сам по слотам 08:30, 14:00, 21:30 (MSK).
+- Свободный чат в любое время: ответ разбирается на еду, воду, сон, тренировку, настроение, задачи.
+- Записи: `01 Daily/YYYY-MM-DD.md`, цели в `Проекты/Life OS/Цели.md`, зеркало `Life OS/data/entries.jsonl`.
+- SQLite и готовый дашборд — в `~/Library/Application Support/LifeOS/`.
+- Наружу: Telegram Bot API и (только при `llm.enabled` и заполненном ключе) LLM `api.samp.team`.
+
+## Что внутри
+
+- `src/` — Python 3.9+, только stdlib: Telegram long polling, слоты, SQLite, Obsidian, дашборд.
+- `config/config.example.json` — шаблон; `install.sh`, `uninstall.sh`, `ops/` — установка, LaunchAgent, удаление.
+- `dashboard/template.html` — шаблон дашборда; `demo/index.html` — собранный пример.
+- `tests/` — unit-тесты и e2e на мок-сервере; `check.sh` — быстрая самопроверка.
+
+## Как запустить
+
+1. macOS + Python 3.9+; только stdlib, без pip и npm.
+2. Человек создаёт бота у @BotFather и узнаёт свой `chat_id` (шаги 1–2 README).
+3. `cp config/config.example.json config/config.json`, вписать `telegram.token` и `telegram.allowed_chat_id`, `chmod 600`.
+4. `bash install.sh` — копирует в `~/Library/Application Support/LifeOS`, ставит LaunchAgent `com.lifeos.agent`.
+5. Проверить: `launchctl list | grep lifeos`, `bash check.sh`, лог `~/Library/Logs/LifeOS/agent.log`.
+
+## Чего нет в 0.1.1
+
+- Публичного сайта, облака, хостинга, мобильного приложения.
+- Недельного дайджеста (слот выключен), голосовых, кнопок, экспорта PNG/PDF, шифрования БД.
+- Команды «обновить прогресс цели»; повторная цель с тем же именем создаёт вторую.
+- Мультипользовательности: только один разрешённый `chat_id`.
+
+## Как проверить без токена
+
+- `bash check.sh` — 11 проверок: compileall, unit-тесты, `bash -n`, plist, JSON, секреты, git.
+- `python3 src/main.py --dry-run --once` — один цикл без записи в базу, Obsidian и расписание.
+- `bash install.sh --dry-run` — план установки, ничего не меняет.
+
+## Документация
+
+- [README.md](README.md) — установка, команды, диагностика.
+- [studio/PROJECT_BIBLE.md](studio/PROJECT_BIBLE.md) — границы, принципы, приёмка.
+- [studio/ARCHITECTURE_MAP.md](studio/ARCHITECTURE_MAP.md) — модули, потоки, данные.
+- [INTERFACES.md](INTERFACES.md) — контракты модулей.
+- [ТЗ.md](ТЗ.md) — исходные требования.
+- [studio/TEST_HISTORY.md](studio/TEST_HISTORY.md) — прогоны и доказательства.
+- [demo/index.html](demo/index.html) — демо-дашборд (noindex, генерируется).
+
+## Статус проверки
+
+- 17.11.2026: `bash check.sh` — PASS, 11 проверок.
+- Живой Telegram-запуск не проверен: токена нет (`studio/TEST_HISTORY.md`, §3).
+- Тесты: `python3 -m unittest discover -s tests`; история прогонов — `studio/TEST_HISTORY.md`.
+
+## Примечание
+
+- `llms.txt` — предложение сообщества, не стандарт и не сигнал Google Search.
+- Файл описывает репозиторий; публичного URL у проекта нет.

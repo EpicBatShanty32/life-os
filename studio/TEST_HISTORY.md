@@ -242,6 +242,19 @@ OCR (`tools/ocr.js`). Живая база не тронута, артефакт�
 
 ---
 
+### 2.12 Прогон после волны 3 — 266 тестов на 3.13 и на 3.9 (2026-11-17 00:35 MSK)
+
+Повод: закрыть пробел «на 3.9.6 юнит-тесты не гонялись» и подтвердить волну 3 (онбординг, цели, привычки, финансы, обучение).
+
+| Команда | Результат |
+|---|---|
+| `python3 -m unittest discover -s tests -q` (3.13.14) | **266 тестов, OK**, 1,400 с |
+| `PYTHONPYCACHEPREFIX=/tmp/lifeos-pyc /usr/bin/python3 -m unittest discover -s tests -q` (3.9.6 — системный, его берёт launchd) | **266 тестов, OK**, 1,576 с |
+| `python3 tests/e2e_mock.py` | **47 из 47**, rc=0 |
+| `PYTHONPYCACHEPREFIX=/tmp/lifeos-pyc bash check.sh` | **PASS, 11 проверок** |
+
+Новые файлы тестов волны 3: `tests/test_money.py`, `tests/test_learning.py` (в предыдущих коммитах отсутствовали — вошли вместе с волной 3).
+
 ## 3. Что не проверено (честные пробелы)
 
 1. **Живой Telegram**: токена нет → ни одного реального `getUpdates`/`sendMessage`.
@@ -252,15 +265,17 @@ OCR (`tools/ocr.js`). Живая база не тронута, артефакт�
 5. **24/7**: ротация `RotatingFileHandler` 5 МБ × 3 покрыта кодом, но не наблюдалась на
    длинном прогоне; stdout launchd пишется в отдельный `agent.log` без ротации (backlog #4).
 6. **Установка на чистую систему**: только `--dry-run` и `bash -n`.
-7. **Демо отстало от шаблона**: `dashboard/template.html` переписан с 16:44
-   (1 600+ строк, ~77 КБ), а `demo/index.html` — 701 строка от 16:34. Демо не пересобрано,
-   поэтому пользователь по нему увидит старый дизайн; e2e при этом проверяет новый шаблон.
+7. **Демо пересобрано** (2026-11-17 00:40): `demo/index.html` — 2 559 строк, 140 485 Б,
+   данные подставлены в `window.LIFEOS_DATA` (`demo/data.json` 7 369 Б), структура совпадает
+   с `dashboard/template.html` строка в строку. **Чего всё ещё нет:** открытия демо в браузере
+   с проверкой консоли и вид глазами — сборка проверена e2e, отрисовка нет.
 
 ## 4. Как воспроизвести
 
 ```bash
 cd "/Users/user/Documents/deepseek-harness/default-workspace/telegram-life-agent"
-python3 -m unittest discover tests -v                 # 150 тестов
+python3 -m unittest discover -s tests -q              # 266 тестов (3.13)
+PYTHONPYCACHEPREFIX=/tmp/lifeos-pyc /usr/bin/python3 -m unittest discover -s tests -q   # 266 тестов (3.9.6, как у launchd)
 python3 tests/e2e_mock.py                             # 47 проверок e2e
 bash check.sh                                         # 11 проверок, PASS/FAIL
 python3 -m unittest discover -s tests -p test_obsidian.py

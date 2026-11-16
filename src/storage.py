@@ -1,6 +1,7 @@
 """Хранилище Life OS на SQLite (стандартная библиотека).
 
-Схема — ТЗ §5: ``messages``, ``entries``, ``goals``, ``habits``, ``kv``.
+Схема — ТЗ §5 и домены v0.2: ``messages``, ``entries``, ``goals``, ``habits``,
+``kv``, ``money`` (расходы/доходы), ``learning`` (минуты обучения).
 Режим WAL и `busy_timeout`, чтобы дашборд/тесты могли читать базу, пока
 агент в неё пишет.
 
@@ -74,11 +75,49 @@ CREATE TABLE IF NOT EXISTS kv (
     value TEXT
 );
 
+CREATE TABLE IF NOT EXISTS money (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT,
+    date TEXT,
+    kind TEXT,
+    amount REAL,
+    currency TEXT DEFAULT 'RUB',
+    category TEXT,
+    note TEXT,
+    raw TEXT
+);
+
+CREATE TABLE IF NOT EXISTS learning (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts TEXT,
+    date TEXT,
+    title TEXT,
+    minutes INTEGER,
+    kind TEXT DEFAULT 'study',
+    raw TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_entries_date ON entries(date);
 CREATE INDEX IF NOT EXISTS idx_entries_written ON entries(written);
 CREATE INDEX IF NOT EXISTS idx_messages_chat ON messages(chat_id);
 CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);
+CREATE INDEX IF NOT EXISTS idx_money_date ON money(date);
+CREATE INDEX IF NOT EXISTS idx_learning_date ON learning(date);
 """
+
+#: Допустимые виды финансовой записи.
+_MONEY_KINDS = ("spend", "income")
+#: Верхняя граница одной суммы: защита от опечаток (500 000 000 000) и от
+#: переполнения REAL в отчётах.
+_MAX_MONEY_AMOUNT = 1e9
+#: Минуты обучения: 1 минута — минимум, 1440 — целые сутки.
+_MIN_LEARNING_MINUTES = 1
+_MAX_LEARNING_MINUTES = 1440
+#: Обрезка заметок/названий при записи: приватный текст не раздувает БД.
+_MAX_CATEGORY_CHARS = 80
+_MAX_NOTE_CHARS = 200
+_MAX_TITLE_CHARS = 200
+
 
 _GOAL_FIELDS = ("title", "target", "current", "start", "direction", "deadline",
                 "status", "note")
@@ -152,8 +191,62 @@ def _goal_from_row(row: sqlite3.Row) -> dict:
     return {key: ("" if row[key] is None else row[key]) for key in row.keys()}
 
 
+def _money_kind(value) -> str:
+    """Вид финансовой записи: только ``spend``/``income`` (регистр не важен)."""
+    kind = _text(value).strip().lower()
+    if kind not in _MONEY_KINDS:
+        raise ValueError(
+            "add_money: kind должен быть 'spend' или 'income', а не %r" % (_text(value),)
+        )
+    return kind
+
+
+def _money_amount(value) -> float:
+    """Сумма: число > 0 и <= 1e9; округляется до копеек.
+
+    Строка тоже допустима в «человеческом» виде: ``"1 000"`` (пробел —
+    тысячи) и ``"500,50"`` (запятая — десятичный разделитель).
+    """
+    if isinstance(value, bool) or value is None:
+        raise ValueError("add_money: amount должен быть числом больше 0 и не больше 1e9")
+    if isinstance(value, str):
+        value = value.strip().replace(" ", "").replace("\u00a0", "")
+        value = value.replace(",", ".")
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        raise ValueError("add_money: amount должен быть числом больше 0 и не больше 1e9")
+    if amount != amount or amount in (float("inf"), float("-inf")):
+        raise ValueError("add_money: amount должен быть конечным числом")
+    amount = round(amount, 2)
+    if amount <= 0 or amount > _MAX_MONEY_AMOUNT:
+        raise ValueError("add_money: amount должен быть больше 0 и не больше 1e9")
+    return amount
+
+
+def _learning_minutes(value) -> int:
+    """Минуты обучения: целое 1..1440."""
+    if isinstance(value, bool) or value is None:
+        raise ValueError("add_learning: minutes должен быть целым числом 1..1440")
+    if isinstance(value, float) and not value.is_integer():
+        raise ValueError("add_learning: minutes должен быть целым числом 1..1440")
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError):
+        raise ValueError("add_learning: minutes должен быть целым числом 1..1440")
+    if minutes < _MIN_LEARNING_MINUTES or minutes > _MAX_LEARNING_MINUTES:
+        raise ValueError("add_learning: minutes должен быть в диапазоне 1..1440")
+    return minutes
+
+
+def _trim(value, limit: int) -> str:
+    """Строка без крайних пробелов, не длиннее ``limit`` символов."""
+    return _text(value).strip()[:limit]
+
+
 class Storage:
-    """Обёртка над SQLite: сообщения, записи, цели, привычки, key-value.
+    """Обёртка над SQLite: сообщения, записи, цели, привычки, key-value,
+    финансы и обучение.
 
     Args:
         db_path: путь к файлу БД (или ``:memory:``).
@@ -239,6 +332,19 @@ class Storage:
     def _today_iso(self) -> str:
         """Текущая дата в таймзоне хранилища (YYYY-MM-DD)."""
         return _today_iso(self.tz)
+
+    def _date_of_ts(self, ts: str) -> str:
+        """Дата (YYYY-MM-DD) из ISO-времени записи.
+
+        Первые 10 символов ISO — дата; кривой/пустой ts не роняет запись,
+        а подставляет сегодняшнюю дату в таймзоне хранилища.
+        """
+        head = _text(ts)[:10]
+        try:
+            date.fromisoformat(head)
+        except ValueError:
+            return self._today_iso()
+        return head
 
     # ------------------------------------------------------------- сообщения
     def record_message(self, chat_id: int, direction: str, text: str,
@@ -463,3 +569,135 @@ class Storage:
             "UPDATE habits SET streak = ?, last_done = ?, total = total + 1 WHERE id = ?",
             (streak, day, int(row["id"])),
         )
+
+    # -------------------------------------------------------------- финансы
+    def add_money(self, kind: str, amount: float, category: str = "прочее",
+                  note: str = "", ts: str | None = None,
+                  currency: str = "RUB") -> int:
+        """Добавляет расход/доход, возвращает id.
+
+        Args:
+            kind: ``spend`` (расход) или ``income`` (доход).
+            amount: сумма > 0 и <= 1e9; округляется до копеек.
+            category: категория (например «кафе»); пустая → «прочее».
+            note: заметка в свободной форме, обрезается до 200 символов.
+            ts: ISO-время записи; ``None`` — текущее время хранилища.
+                Дата (``date``) берётся из первых 10 символов ts.
+            currency: валюта, по умолчанию RUB.
+
+        Raises:
+            ValueError: если kind не spend/income или сумма вне границ —
+                бот показывает подсказку, а не падает.
+        """
+        kind = _money_kind(kind)
+        amount = _money_amount(amount)
+        ts = _text(ts).strip() or self._now_iso()
+        cursor = self._execute(
+            "INSERT INTO money(ts, date, kind, amount, currency, category, note, raw) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (
+                ts,
+                self._date_of_ts(ts),
+                kind,
+                amount,
+                _trim(currency, 8) or "RUB",
+                _trim(category, _MAX_CATEGORY_CHARS) or "прочее",
+                _trim(note, _MAX_NOTE_CHARS),
+                "",  # сырой текст команды не храним: он уже разобран в note
+            ),
+        )
+        return int(cursor.lastrowid or 0)
+
+    def money_between(self, date_from: str, date_to: str) -> list[dict]:
+        """Записи о деньгах за диапазон дат включительно, свежие сверху.
+
+        Сортировка: по ``date`` убыванию, внутри дня — по id убыванию.
+        """
+        rows = self._execute(
+            "SELECT * FROM money WHERE date >= ? AND date <= ? "
+            "ORDER BY date DESC, id DESC",
+            (_text(date_from), _text(date_to)), commit=False,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def money_totals(self, date_from: str, date_to: str) -> dict:
+        """Итоги за диапазон: ``{'spend': float, 'income': float}``."""
+        rows = self._execute(
+            "SELECT kind, COALESCE(SUM(amount), 0) AS total FROM money "
+            "WHERE date >= ? AND date <= ? GROUP BY kind",
+            (_text(date_from), _text(date_to)), commit=False,
+        ).fetchall()
+        totals = {"spend": 0.0, "income": 0.0}
+        for row in rows:
+            kind = _text(row["kind"])
+            if kind in totals:
+                totals[kind] = round(float(row["total"] or 0.0), 2)
+        return totals
+
+    def spend_by_category(self, date_from: str, date_to: str) -> list[dict]:
+        """Расходы по категориям за диапазон, по убыванию суммы.
+
+        Только ``kind='spend'``: доходы в топ категорий не попадают.
+        """
+        rows = self._execute(
+            "SELECT category, COALESCE(SUM(amount), 0) AS amount FROM money "
+            "WHERE date >= ? AND date <= ? AND kind = 'spend' "
+            "GROUP BY category ORDER BY amount DESC, category ASC",
+            (_text(date_from), _text(date_to)), commit=False,
+        ).fetchall()
+        return [
+            {"category": _text(row["category"]) or "прочее",
+             "amount": round(float(row["amount"] or 0.0), 2)}
+            for row in rows
+        ]
+
+    # ------------------------------------------------------------- обучение
+    def add_learning(self, title: str, minutes: int, kind: str = "study",
+                     ts: str | None = None) -> int:
+        """Добавляет сессию обучения, возвращает id.
+
+        Args:
+            title: чему учился (например «python»); пустое допустимо.
+            minutes: длительность, целое 1..1440.
+            kind: тип записи, по умолчанию ``study``.
+            ts: ISO-время записи; ``None`` — текущее время хранилища.
+
+        Raises:
+            ValueError: если minutes вне 1..1440 или не число.
+        """
+        minutes = _learning_minutes(minutes)
+        ts = _text(ts).strip() or self._now_iso()
+        cursor = self._execute(
+            "INSERT INTO learning(ts, date, title, minutes, kind, raw) "
+            "VALUES (?,?,?,?,?,?)",
+            (
+                ts,
+                self._date_of_ts(ts),
+                _trim(title, _MAX_TITLE_CHARS),
+                minutes,
+                _trim(kind, _MAX_CATEGORY_CHARS) or "study",
+                "",
+            ),
+        )
+        return int(cursor.lastrowid or 0)
+
+    def learning_between(self, date_from: str, date_to: str) -> list[dict]:
+        """Сессии обучения за диапазон дат включительно, свежие сверху."""
+        rows = self._execute(
+            "SELECT * FROM learning WHERE date >= ? AND date <= ? "
+            "ORDER BY date DESC, id DESC",
+            (_text(date_from), _text(date_to)), commit=False,
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def learning_minutes(self, date_from: str, date_to: str) -> int:
+        """Сумма минут обучения за диапазон дат включительно."""
+        row = self._execute(
+            "SELECT COALESCE(SUM(minutes), 0) AS total FROM learning "
+            "WHERE date >= ? AND date <= ?",
+            (_text(date_from), _text(date_to)), commit=False,
+        ).fetchone()
+        try:
+            return int(row["total"] or 0) if row is not None else 0
+        except (TypeError, ValueError):
+            return 0

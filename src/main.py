@@ -43,13 +43,28 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src import config as config_mod  # noqa: E402
+from src import __version__ as APP_VERSION  # noqa: E402
 
 __all__ = ["main"]
 
+#: Лог крутится после 5 МБ, архив ровно один — ``agent.log.1`` (v0.3): лишние
+#: копии не нужны, а одна даёт «что было до сбоя» без роста диска.
 LOG_MAX_BYTES = 5 * 1024 * 1024
-LOG_BACKUP_COUNT = 3
+LOG_BACKUP_COUNT = 1
 LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+#: Пауза между повторами после сетевой ошибки: 2, 4, 8, 16, 32, 60, 60… секунд.
+#: Потолок нужен, чтобы бот не «засыпал» навсегда при долгом обрыве связи.
+BACKOFF_BASE_S = 2.0
+BACKOFF_FACTOR = 2.0
+BACKOFF_CAP_S = 60.0
+#: Сколько секунд максимум ждём по подсказке сервера (``retry_after`` у 429):
+#: его просьбу уважаем, но не больше 15 минут.
+RETRY_AFTER_MAX_S = 900.0
+#: Таймаут long polling. Telegram держит запрос до этого времени, поэтому оно же
+#: ограничивает задержку завершения по SIGTERM (launchd ждёт 20 с до SIGKILL).
+POLL_TIMEOUT_S = 10
 
 PID_RELATIVE_PATH = "data/lifeos.pid"
 #: Права pid-файла: как у остальных личных данных (только владельцу).
@@ -513,6 +528,27 @@ def _app_timezone(cfg: dict) -> ZoneInfo:
         return ZoneInfo("Europe/Moscow")
 
 
+def _startup_banner(cfg: dict) -> str:
+    """Строка «кто и где запустился» для лога: версия, pid, таймзона.
+
+    Без неё по ``agent.log`` нельзя понять, какой именно экземпляр и с какой
+    таймзоной работает: после обновления/перезапуска launchd строки старых и
+    новых запусков перемешаны. Секретов в строке нет.
+    """
+    tz_name = str((cfg.get("app") or {}).get("timezone") or "Europe/Moscow").strip()
+    try:
+        moment = datetime.now(_app_timezone(cfg))
+        offset = moment.strftime("%z") or "?"
+        stamp = moment.isoformat(timespec="seconds")
+    except Exception:  # noqa: BLE001 — баннер не должен мешать запуску
+        offset = "?"
+        stamp = datetime.now().isoformat(timespec="seconds")
+    py_version = sys.version.split()[0] if sys.version else "?"
+    return "Life OS v%s: pid %d, python %s, таймзона %s (UTC%s), старт %s" % (
+        APP_VERSION, os.getpid(), py_version, tz_name or "?", offset, stamp,
+    )
+
+
 def _kv_get_int(storage, key: str) -> int | None:
     """Безопасно читает неотрицательное int из kv (пусто/битое → None)."""
     if storage is None:
@@ -624,6 +660,62 @@ class DryRunTelegram:
         return {}
 
 
+# ============================================================== УСТОЙЧИВОСТЬ
+class Backoff:
+    """Экспоненциальная пауза между повторами с потолком.
+
+    Ряд пауз: ``2, 4, 8, 16, 32, 60, 60…`` секунд (``BACKOFF_BASE_S`` ×
+    ``BACKOFF_FACTOR``, не больше ``BACKOFF_CAP_S``). Если сервер сам сказал,
+    сколько ждать (``retry_after`` у 429), пауза берётся не меньше подсказки —
+    но и не больше ``RETRY_AFTER_MAX_S``, чтобы бот не замер на часы.
+
+    После успешного шага вызывается :meth:`reset` — следующий сбой снова
+    начинается с короткой паузы, а не с «накопленной» длинной.
+    """
+
+    def __init__(self, base=None, factor=None, cap=None) -> None:
+        self.base = BACKOFF_BASE_S if base is None else max(0.0, float(base))
+        self.factor = BACKOFF_FACTOR if factor is None else max(1.0, float(factor))
+        self.cap = BACKOFF_CAP_S if cap is None else max(self.base, float(cap))
+        self.attempt = 0
+
+    def __repr__(self) -> str:
+        return "Backoff(base=%s, factor=%s, cap=%s, attempt=%s)" % (
+            self.base, self.factor, self.cap, self.attempt,
+        )
+
+    def reset(self) -> None:
+        """Сбрасывает счётчик (успешный шаг: снова начинаем с короткой паузы)."""
+        self.attempt = 0
+
+    def peek(self) -> float:
+        """Пауза, которую вернул бы следующий :meth:`next` (без изменений)."""
+        return min(self.cap, self.base * (self.factor ** self.attempt))
+
+    def next(self, retry_after=None) -> float:
+        """Возвращает паузу и сдвигает счётчик.
+
+        Args:
+            retry_after: сколько секунд подождать по мнению сервера
+                (``TelegramError.retry_after``); мусор игнорируется.
+
+        Returns:
+            Пауза в секундах: не меньше подсказки сервера, не больше
+            ``RETRY_AFTER_MAX_S``.
+        """
+        wait = self.peek()
+        self.attempt += 1
+        if retry_after is None:
+            return wait
+        try:
+            hinted = float(retry_after)
+        except (TypeError, ValueError):
+            return wait
+        if hinted <= 0 or hinted != hinted:  # NaN тоже отбрасываем
+            return wait
+        return max(wait, min(hinted, RETRY_AFTER_MAX_S))
+
+
 # ================================================================== ЦИКЛ
 def _sleep(stop: dict, seconds: float) -> None:
     """Сон с реакцией на сигнал остановки (дробим на короткие куски)."""
@@ -729,6 +821,9 @@ def main(argv: list[str] | None = None) -> int:
         cfg.get("_root"), args.dry_run, args.once,
     )
     logger.info("Конфиг: %s", cfg.get("_config_path"))
+    # Версия, pid и таймзона — первая строка каждого запуска (v0.3): по логу
+    # видно, какой экземпляр работает и с какой зоной считаются слоты.
+    logger.info("%s", _startup_banner(cfg))
 
     # 1a. --dry-run полностью изолирован от боевого состояния (REVIEW P1-2):
     # своя временная БД (вместе с kv), без Obsidian и без платных вызовов LLM.
@@ -932,9 +1027,12 @@ def main(argv: list[str] | None = None) -> int:
             pass
 
     auth_errors = 0
-    poll_timeout = 0 if args.once else 20
-    logger.info("Цикл запущен (timeout=%s c, тик каждые %s c)", poll_timeout,
-                0 if args.once else 1)
+    # 0 — Telegram не держит запрос (--once); иначе короче 20 c, чтобы SIGTERM
+    # успевал до «жёсткого» убийства от launchd (ExitTimeOut по умолчанию 20 c).
+    poll_timeout = 0 if args.once else POLL_TIMEOUT_S
+    backoff = Backoff()
+    logger.info("Цикл запущен (timeout=%s c, тик каждые %s c, максимум паузы %.0f c)",
+                poll_timeout, 0 if args.once else 1, BACKOFF_CAP_S)
 
     exit_code = 0
     try:
@@ -945,16 +1043,21 @@ def main(argv: list[str] | None = None) -> int:
             except telegram_mod.TelegramError as exc:
                 status = exc.status
                 if status == 409:
-                    logger.warning("%s", exc)
-                    _sleep(stop, 0 if args.once else 5)
+                    # Второй экземпляр держит тот же getUpdates: ждём по
+                    # нарастающей и не трогаем лок/данные.
+                    pause = backoff.next()
+                    logger.warning("%s Пауза %.0f с.", exc, pause)
+                    _sleep(stop, 0 if args.once else pause)
                 elif status == 429:
-                    pause = exc.retry_after if exc.retry_after is not None else 5
-                    pause = min(max(float(pause), 1.0), 60.0)
+                    pause = backoff.next(exc.retry_after)
                     logger.warning("Telegram rate limit (429): пауза %.0f с", pause)
                     _sleep(stop, 0 if args.once else pause)
                 elif status in (401, 403):
                     auth_errors += 1
-                    logger.error("Ошибка авторизации Telegram (%s): %s", status, exc)
+                    logger.error(
+                        "Ошибка авторизации Telegram (%s), попытка %d из 3: %s",
+                        status, auth_errors, exc,
+                    )
                     if auth_errors >= 3:
                         logger.error(
                             "Три ошибки авторизации подряд — останавливаюсь. "
@@ -962,15 +1065,19 @@ def main(argv: list[str] | None = None) -> int:
                         )
                         exit_code = 1
                         break
-                    _sleep(stop, 0 if args.once else 10)
+                    pause = backoff.next()
+                    _sleep(stop, 0 if args.once else pause)
                 else:
-                    logger.warning("Ошибка Telegram: %s", exc)
-                    _sleep(stop, 0 if args.once else 2)
+                    pause = backoff.next()
+                    logger.warning("Ошибка Telegram: %s Пауза %.0f с.", exc, pause)
+                    _sleep(stop, 0 if args.once else pause)
             except Exception as exc:  # noqa: BLE001
+                pause = backoff.next()
                 logger.exception("Неожиданная ошибка при опросе Telegram: %s", exc)
-                _sleep(stop, 0 if args.once else 2)
+                _sleep(stop, 0 if args.once else pause)
             else:
                 auth_errors = 0
+                backoff.reset()  # связь восстановилась — снова короткие паузы
                 offset, last_update_id = _handle_updates(
                     updates, offset, scheduler, tz, logger,
                     storage=storage, last_update_id=last_update_id,

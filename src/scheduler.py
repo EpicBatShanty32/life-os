@@ -38,6 +38,24 @@ MAX_HISTORY_CHARS = 12000
 #: Лимит размера значения сессии в kv, в байтах (F9): слишком большая сессия
 #: сбрасывается с предупреждением, а не читается на каждом сообщении/тике.
 MAX_SESSION_BYTES = 32 * 1024
+#: Ключи «пульса» планировщика в kv: tools/health.py по ним видит, что бот жив
+#: и когда последний раз тикал без ошибок (в логе это видно только глазами).
+HEARTBEAT_KEY = "tick:last_ok"
+TICK_ERROR_KEY = "tick:last_error"
+#: Как часто тик отмечается в kv, в секундах. Писать в SQLite на каждом тике
+#: незачем: раз в минуту достаточно и для health, и для «жив ли бот».
+HEARTBEAT_INTERVAL_S = 60.0
+#: Верхняя граница одной финансовой суммы — та же, что в Storage.add_money.
+MAX_MONEY_AMOUNT = 1e9
+#: Заметка в финансовой записи и название обучения режутся на этой длине
+#: (Storage хранит не длиннее; бот не раздувает БД случайным текстом).
+MAX_MONEY_NOTE_CHARS = 200
+MAX_LEARNING_TITLE_CHARS = 200
+#: Названия месяцев для заголовков /fin (в русском «за ноябрь» = именительный).
+_MONTHS_NOM = (
+    "январь", "февраль", "март", "апрель", "май", "июнь",
+    "июль", "август", "сентябрь", "октябрь", "ноябрь", "декабрь",
+)
 
 # Подписи на случай, если prompts.SLOT_LABELS недоступны/изменены.
 _FALLBACK_SLOT_LABELS = {
@@ -330,6 +348,19 @@ _COMMAND_ALIASES = {
     "привычка": "habit",
     "habits": "habits",
     "привычки": "habits",
+    # v0.2: финансы и обучение.
+    "spend": "spend",
+    "расход": "spend",
+    "трата": "spend",
+    "income": "income",
+    "доход": "income",
+    "fin": "fin",
+    "финансы": "fin",
+    "деньги": "fin",
+    "learn": "learn",
+    "обучение": "learn",
+    "учёба": "learn",
+    "учеба": "learn",
 }
 
 _NUM_RE = re.compile(r"-?\d+(?:[.,]\d+)?")
@@ -366,6 +397,95 @@ def _fmt_num(value: float | None) -> str:
     if abs(value - round(value)) < 1e-9:
         return str(int(round(value)))
     return ("%.1f" % value).rstrip("0").rstrip(".")
+
+
+def _fmt_money(value) -> str:
+    """Сумма по-русски: 500 → «500», 1000 → «1 000», 500.5 → «500,5»."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if number != number or number in (float("inf"), float("-inf")):
+        return "—"
+    if abs(number - round(number)) < 1e-9:
+        return "{:,}".format(int(round(number))).replace(",", " ")
+    text = ("%.2f" % number).rstrip("0").rstrip(".")
+    whole, _, fraction = text.partition(".")
+    sign = "-" if whole.startswith("-") else ""
+    grouped = "{:,}".format(int(whole.lstrip("+-"))).replace(",", " ")
+    return "%s%s,%s" % (sign, grouped, fraction)
+
+
+def _duration_ru(minutes) -> str:
+    """Минуты по-русски: 45 → «45 мин», 120 → «2 ч», 125 → «2 ч 5 мин»."""
+    try:
+        total = int(minutes)
+    except (TypeError, ValueError):
+        return "—"
+    if total < 60:
+        return "%d мин" % total
+    hours, rest = divmod(total, 60)
+    return ("%d ч %d мин" % (hours, rest)) if rest else ("%d ч" % hours)
+
+
+def _month_bounds(day) -> tuple:
+    """Первое и последнее число месяца, в котором лежит дата ``day``."""
+    first = day.replace(day=1)
+    if first.month == 12:
+        next_first = first.replace(year=first.year + 1, month=1)
+    else:
+        next_first = first.replace(month=first.month + 1)
+    return first, next_first - timedelta(days=1)
+
+
+_AMOUNT_NUMBER_RE = re.compile(r"^[+-]?\d+(?:[.,]\d+)?$")
+_INTEGER_TOKEN_RE = re.compile(r"^[+-]?\d+$")
+_THOUSANDS_TOKEN_RE = re.compile(r"^\d{3}$")
+#: Unicode-пробелы, которые человек (и Telegram) может прислать вместо обычного.
+_SPACE_CHARS = ("\u00a0", "\u2007", "\u2009", "\u202f", "\u3000")
+
+
+def _split_amount(raw) -> tuple:
+    """Сумма из начала строки и остаток: «500 кафе обед» → (500.0, «кафе обед»).
+
+    Правила ТЗ: точка — десятичный разделитель, пробел — разделитель тысяч.
+    Поэтому «1 000» → 1000.0, «1.000» → 1.0, «500,50» → 500.5. Если строка
+    начинается не с числа, возвращается (None, остаток) — решение и текст
+    подсказки остаются за вызывающим кодом, исключений нет.
+    """
+    text = _text(raw)
+    for space in _SPACE_CHARS:
+        text = text.replace(space, " ")
+    tokens = [token for token in text.strip().split(" ") if token]
+    if not tokens:
+        return None, ""
+    parts = [tokens[0]]
+    index = 1
+    # «1 000 000»: продолжаем склеивать, пока следующее слово — ровно три
+    # цифры, а накопленная сумма — целое число. «500 кафе» не склеивается,
+    # потому что «кафе» — не цифры.
+    while (
+        index < len(tokens)
+        and _THOUSANDS_TOKEN_RE.match(tokens[index])
+        and _INTEGER_TOKEN_RE.match("".join(parts))
+    ):
+        parts.append(tokens[index])
+        index += 1
+    rest = " ".join(tokens[index:])
+    number = "".join(parts)
+    if not _AMOUNT_NUMBER_RE.match(number):
+        return None, rest
+    if "." in number and "," in number:
+        number = number.replace(".", "").replace(",", ".")
+    elif "," in number:
+        number = number.replace(",", ".")
+    try:
+        amount = float(number)
+    except ValueError:
+        return None, rest
+    if amount != amount or amount in (float("inf"), float("-inf")):
+        return None, rest
+    return amount, rest
 
 
 def _collapse(text) -> str:
@@ -487,6 +607,9 @@ class Scheduler:
         # Итог последней сборки дашборда: нужен ролловеру, чтобы не отмечать
         # день успешным при упавшем dash_build (REVIEW P2.5).
         self._dashboard_ok = True
+        # Время (monotonic) последней записи «пульса» в kv — чтобы не писать
+        # в БД на каждом тике (тики идут ежесекундно).
+        self._heartbeat_at = 0.0
 
     # ================================================================ ВРЕМЯ
     def _local(self, now: datetime | None = None) -> datetime:
@@ -744,18 +867,61 @@ class Scheduler:
         сегодняшнего слота до следующего тика (REVIEW P2.4).
         """
         now = self._local(now)
+        failures = 0
         try:
             self._tick_overdue(now)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
             self.log.exception("tick: ошибка при проверке просроченных сессий")
+            self._note_tick_error(exc, now)
         try:
             self._tick_slots(now)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
             self.log.exception("tick: ошибка при запуске слота")
+            self._note_tick_error(exc, now)
         try:
             self._tick_rollover(now)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
             self.log.exception("tick: ошибка ежедневного ролловера")
+            self._note_tick_error(exc, now)
+        # Упавший тик не роняет планировщик: фазы изолированы, а «пульс»
+        # обновляем только когда всё прошло — health увидит застой.
+        if not failures:
+            self._note_heartbeat(now)
+
+    def _note_heartbeat(self, now: datetime) -> None:
+        """Отмечает успешный тик в kv (не чаще ``HEARTBEAT_INTERVAL_S``).
+
+        Без этой отметки «последний успешный тик» виден только в логе, а
+        ``tools/health.py`` должен показывать его одной командой. Ошибка
+        записи не мешает работе: тик уже выполнен.
+        """
+        if self.storage is None:
+            return
+        moment = time.monotonic()
+        if self._heartbeat_at and (moment - self._heartbeat_at) < HEARTBEAT_INTERVAL_S:
+            return
+        try:
+            self.storage.kv_set(HEARTBEAT_KEY, now.isoformat(timespec="seconds"))
+            self.storage.kv_del(TICK_ERROR_KEY)
+        except Exception:  # noqa: BLE001 — БД может быть закрыта или занята
+            self.log.warning("Не удалось записать отметку тика в БД")
+            return
+        self._heartbeat_at = moment
+
+    def _note_tick_error(self, exc, now: datetime) -> None:
+        """Запоминает тип последней ошибки тика (без текста: в нём бывают пути)."""
+        if self.storage is None:
+            return
+        try:
+            self.storage.kv_set(
+                TICK_ERROR_KEY,
+                "%s %s" % (now.isoformat(timespec="seconds"), type(exc).__name__),
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     def _parse_time(self, value) -> tuple[int, int] | None:
         match = re.match(r"^\s*([01]?\d|2[0-3]):([0-5]\d)\s*$", _text(value))
@@ -1166,7 +1332,15 @@ class Scheduler:
         elif command == "habit":
             self._handle_habit(chat_id, args, now)
         elif command == "habits":
-            self._send(chat_id, self.habits_text())
+            self._send(chat_id, self.habits_text(now))
+        elif command == "spend":
+            self._handle_money(chat_id, args, "spend", now)
+        elif command == "income":
+            self._handle_money(chat_id, args, "income", now)
+        elif command == "fin":
+            self._send(chat_id, self.fin_text(now))
+        elif command == "learn":
+            self._handle_learning(chat_id, args, now)
         elif command == "skip":
             session = self._load_session()
             if session is None:
@@ -1287,6 +1461,157 @@ class Scheduler:
         )
         self.log.info("Привычка отмечена: %s (серия %d)", name, streak)
 
+    # ------------------------------------------------- финансы и обучение
+    def _handle_money(self, chat_id: int, args: str, kind: str,
+                      now: datetime) -> None:
+        """«/spend 500 кафе обед» и «/income 100000 зарплата».
+
+        Ошибки ввода (нечисло, 0, отрицательное, больше 1e9) превращаются в
+        понятную подсказку, а не в исключение: бот не должен падать от опечатки.
+        Приватный текст (заметку) в лог не пишем — только вид записи.
+        """
+        word = "расход" if kind == "spend" else "доход"
+        command = "spend" if kind == "spend" else "income"
+        raw = _text(args).strip()
+        if not raw:
+            self._send(
+                chat_id,
+                "Формат: /%s 500 кафе обед\n"
+                "Сначала сумма, потом категория одним словом, дальше — заметка. "
+                "Сводка за месяц — /fin." % command,
+            )
+            return
+        amount, rest = _split_amount(raw)
+        if amount is None:
+            self._send(
+                chat_id,
+                "Не понял сумму. Формат: /%s 500 кафе обед — сначала число "
+                "(например 500, 500,50 или 1 000)." % command,
+            )
+            return
+        if amount <= 0:
+            self._send(
+                chat_id,
+                "Сумма должна быть больше нуля. Пример: /%s 500 кафе." % command,
+            )
+            return
+        if amount > MAX_MONEY_AMOUNT:
+            self._send(
+                chat_id,
+                "Слишком большая сумма: максимум 1 000 000 000. "
+                "Пример: /%s 500 кафе." % command,
+            )
+            return
+        words = rest.split()
+        category = (words[0][:80] if words else "прочее")
+        note = " ".join(words[1:])[:MAX_MONEY_NOTE_CHARS].strip()
+        ts = self._local(now).isoformat(timespec="seconds")
+        try:
+            self.storage.add_money(kind, amount, category=category, note=note, ts=ts)
+        except Exception:  # noqa: BLE001
+            self.log.exception("Не удалось сохранить финансовую запись")
+            self._send(chat_id, "Не получилось сохранить запись — попробуй ещё раз.")
+            return
+        reply = "Записал %s: %s ₽ — %s" % (word, _fmt_money(amount), category)
+        if note:
+            reply += " (%s)" % note
+        self._send(chat_id, reply + ".")
+        self.log.info("Записана финансовая запись (%s)", kind)
+
+    def fin_text(self, now: datetime | None = None) -> str:
+        """Сводка за текущий месяц: расходы, доходы, баланс, топ-3 категорий."""
+        local = self._local(now)
+        first, last = _month_bounds(local.date())
+        date_from, date_to = first.isoformat(), last.isoformat()
+        try:
+            totals = self.storage.money_totals(date_from, date_to)
+            by_category = self.storage.spend_by_category(date_from, date_to)
+        except Exception:  # noqa: BLE001
+            self.log.exception("fin: не удалось прочитать финансы")
+            return "Не получилось прочитать финансы — попробуй ещё раз."
+        spend = float(totals.get("spend") or 0.0)
+        income = float(totals.get("income") or 0.0)
+        if not spend and not income:
+            return "Пока нет записей за этот месяц. Начни с /spend 500 кафе."
+        balance = income - spend
+        month = _MONTHS_NOM[local.month - 1]
+        lines = [
+            "Финансы за %s %d:" % (month, local.year),
+            "Расходы: %s ₽" % _fmt_money(spend),
+            "Доходы: %s ₽" % _fmt_money(income),
+            "Баланс: %s%s ₽" % ("-" if balance < 0 else "", _fmt_money(abs(balance))),
+        ]
+        if by_category:
+            lines.append("")
+            lines.append("Топ-%d по расходам:" % min(3, len(by_category)))
+            for index, item in enumerate(by_category[:3], 1):
+                lines.append("%d. %s — %s ₽" % (
+                    index, item["category"], _fmt_money(item["amount"])))
+        else:
+            lines.append("Расходов пока нет — только доходы.")
+        return "\n".join(lines)
+
+    def _handle_learning(self, chat_id: int, args: str, now: datetime) -> None:
+        """«/learn 30 python» — сессия обучения; без аргументов — сводка."""
+        raw = _text(args).strip()
+        if not raw:
+            self._send(chat_id, self.learning_text(now))
+            return
+        words = raw.split()
+        try:
+            minutes = int(words[0])
+        except (TypeError, ValueError):
+            self._send(
+                chat_id,
+                "Не понял, сколько минут. Формат: /learn 30 python — "
+                "сначала минуты, потом тема.",
+            )
+            return
+        if minutes < 1 or minutes > 1440:
+            self._send(
+                chat_id,
+                "Минут должно быть от 1 до 1440. Формат: /learn 30 python — "
+                "сначала минуты, потом тема.",
+            )
+            return
+        title = " ".join(words[1:])[:MAX_LEARNING_TITLE_CHARS].strip()
+        ts = self._local(now).isoformat(timespec="seconds")
+        try:
+            self.storage.add_learning(title, minutes, ts=ts)
+        except Exception:  # noqa: BLE001
+            self.log.exception("Не удалось сохранить сессию обучения")
+            self._send(chat_id, "Не получилось сохранить обучение — попробуй ещё раз.")
+            return
+        if title:
+            reply = "Записал обучение: %d мин — %s." % (minutes, title)
+        else:
+            reply = "Записал обучение: %d мин." % minutes
+        self._send(chat_id, reply)
+        self.log.info("Записана сессия обучения: %d мин", minutes)
+
+    def learning_text(self, now: datetime | None = None) -> str:
+        """Сводка обучения за 7 дней: минуты и число сессий."""
+        local = self._local(now)
+        day = local.date()
+        date_from = day - timedelta(days=6)
+        try:
+            sessions = self.storage.learning_between(
+                date_from.isoformat(), day.isoformat())
+            minutes = self.storage.learning_minutes(
+                date_from.isoformat(), day.isoformat())
+        except Exception:  # noqa: BLE001
+            self.log.exception("learn: не удалось прочитать обучение")
+            return "Не получилось прочитать записи об обучении — попробуй ещё раз."
+        if not sessions:
+            return ("Пока нет записей об обучении за 7 дней. "
+                    "Начни с /learn 30 python.")
+        return "\n".join([
+            "Обучение за 7 дней (%s — %s):" % (
+                self._short_date(date_from), self._short_date(day)),
+            "Минут: %d (%s), сессий: %d." % (
+                minutes, _duration_ru(minutes), len(sessions)),
+        ])
+
     def _start_text(self) -> str:
         name = _text(self.app_cfg.get("name")) or "Life OS"
         return (
@@ -1319,6 +1644,10 @@ class Scheduler:
             "/add_goal Название | 3/10 | срок — добавить цель\n"
             "/habit зарядка — отметить привычку сегодня\n"
             "/habits — привычки и серии\n"
+            "/spend 500 кафе обед — записать расход\n"
+            "/income 100000 зарплата — записать доход\n"
+            "/fin — финансы за месяц: расходы, доходы, баланс, топ категорий\n"
+            "/learn 30 python — записать обучение (без аргументов — сводка за 7 дней)\n"
             "/skip — пропустить текущий вопрос\n"
             "/pause — пауза (плановые вопросы не приходят)\n"
             "/resume — продолжить\n"
@@ -2164,8 +2493,13 @@ class Scheduler:
         lines.append("Добавить: /add_goal Название | прогресс | срок")
         return "\n".join(lines)
 
-    def habits_text(self) -> str:
-        """«/habits» — привычки с серией (P1-6)."""
+    def habits_text(self, now: datetime | None = None) -> str:
+        """«/habits» — привычки с серией (P1-6).
+
+        Дата «сегодня» берётся из ``now`` (время апдейта), а не из стенных
+        часов: /habit отмечает день по ``now``, и список должен считать
+        «сегодня» так же — иначе на границе суток ответ врёт.
+        """
         try:
             habits = self.storage.habits()
         except Exception:  # noqa: BLE001
@@ -2177,7 +2511,7 @@ class Scheduler:
                 "/habit зарядка — отметить сегодня\n"
                 "Потом /habits покажет серию."
             )
-        today = datetime.now(self.tz).date().isoformat()
+        today = self._local(now).date().isoformat()
         lines = ["💪 Привычки (%d)" % len(habits), ""]
         for habit in habits:
             name = _text(habit.get("name")).strip() or "без названия"
