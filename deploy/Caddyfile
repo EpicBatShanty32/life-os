@@ -1,0 +1,103 @@
+# ============================================================================
+# Caddy 2.8+ — TLS-терминация, HTTPS автоматически (Let's Encrypt), reverse
+# proxy на lifeos-api / lifeos-web, сжатие, заголовки безопасности,
+# ограничение размера тела запроса под видео.
+#
+# СТАТУС: не проверено — docker/caddy в среде нет (MASTER_SPEC §0).
+#         Синтаксис — по документации Caddy 2.8; `caddy validate` не запускался.
+#
+# Переменные (из deploy/.env, подставляет compose):
+#   LIFEOS_DOMAIN     example.ru       — A-запись на IP сервера ДО первого старта
+#   ACME_EMAIL        you@example.ru   — контакт для Let's Encrypt
+#   MEDIA_MAX_UPLOAD  2GB              — лимит тела под видео/аудио курсов
+#
+# Маршруты:
+#   /ws, /api/*, /media/*  → lifeos-api:8787  (FastAPI, MASTER_SPEC §2.2)
+#   всё остальное          → lifeos-web:8080  (nginx со статикой SPA)
+# ============================================================================
+
+{
+	email {$ACME_EMAIL}
+
+	# Admin API — только localhost внутри контейнера. По нему compose
+	# проверяет healthcheck (wget http://127.0.0.1:2019/config/).
+	admin localhost:2019
+
+	servers {
+		# HTTP/3 по 443/udp (проброс порта есть в compose).
+		protocols h1 h2 h3
+	}
+}
+
+# ---------------------------------------------------------------------------
+# Общие заголовки безопасности для всех ответов.
+# HSTS без preload: preload необратим (месяцы ожидания исключения), для
+# домашнего сервера и смены домена это ловушка. includeSubDomains — только
+# если домен целиком ваш и все поддомены на HTTPS.
+# ---------------------------------------------------------------------------
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "SAMEORIGIN"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		# Caddy не отдаёт Server по умолчанию, но страхуемся от проксирования.
+		-Server
+	}
+}
+
+{$LIFEOS_DOMAIN} {
+	# gzip для старых клиентов, zstd для современных браузеров и Safari 15.4+.
+	encode zstd gzip
+
+	import security_headers
+
+	# Порядок обработчиков важен: request_body должен стоять до reverse_proxy,
+	# поэтому используем route (в нём директивы не пересортировываются).
+	route {
+		# Видео/аудио курсов: до MEDIA_MAX_UPLOAD (по умолчанию 2 ГБ).
+		# Локальный Bot API по умолчанию принимает файлы до 2 ГБ.
+		@uploads path /api/media* /api/media/* /api/courses/*/media* /api/lessons/*/media*
+		request_body @uploads {
+			max_size {$MEDIA_MAX_UPLOAD:2GB}
+		}
+
+		# Всё остальное (JSON быстрой записи, вес, вода) — до 8 МБ.
+		# Отсекает «случайную» загрузку гигабайта в /api/quick.
+		# Матчер явный (not path), чтобы не объявлять request_body дважды
+		# без матчера: Caddy считает такие повторы ошибкой конфигурации.
+		@notuploads not path /api/media* /api/media/* /api/courses/*/media* /api/lessons/*/media*
+		request_body @notuploads {
+			max_size 8MB
+		}
+
+		# --- WebSocket событий (entry.created, job.progress, sync.updated) ---
+		@ws path /ws
+		reverse_proxy @ws lifeos-api:8787
+
+		# --- API и медиа: FastAPI -------------------------------------------
+		# handle не нужен: reverse_proxy с матчером и так завершает цепочку.
+		# Пути НЕ обрезаются (это не handle_path): /api/overview должен
+		# прийти в приложение как /api/overview.
+		@api path /api/* /media/* /openapi.json /docs /docs/* /redoc
+		reverse_proxy @api lifeos-api:8787 {
+			# Range-запросы для плеера (MASTER_SPEC §2.2) проходят как есть,
+			# Caddy не буферизует потоковую отдачу файлов.
+			flush_interval -1
+		}
+
+		# --- Всё остальное: статика SPA --------------------------------------
+		reverse_proxy lifeos-web:8080
+	}
+
+	# Ошибки апстрима (упал API/веб) — честный 502/503 вместо пустого
+	# ответа; тело короткое, чтобы iPhone не ждал таймаут.
+	# handle_errors допустим только на уровне сайта, не внутри route.
+	handle_errors {
+		# Без плейсхолдеров: в handle_errors доступные имена зависят от версии
+		# Caddy, а текст ошибки владельцу всё равно не нужен — нужен факт и команда.
+		respond "Life OS временно недоступен. Проверьте: docker compose ps" 503
+	}
+}

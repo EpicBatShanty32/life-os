@@ -1,0 +1,70 @@
+# syntax=docker/dockerfile:1.7
+# ============================================================================
+# Life OS v3 — образ бота (aiogram 3.x, long polling, MASTER_SPEC §2.3).
+#
+# СТАТУС: не собрано и не запущено — docker в среде нет (MASTER_SPEC §0).
+#         Проверено статически: этапы FROM, USER, uid 10001, cache-mount.
+#
+# Два этапа: builder (venv + кэш pip) → runtime (venv + код, non-root).
+# Требует app/bot (Фаза 2–3): пока каталога нет, COPY упадёт — это ожидаемо.
+#
+# Сборка:
+#   docker build -f deploy/Dockerfile.bot -t lifeos-bot:local .
+# ============================================================================
+
+# --- Этап 1: зависимости ----------------------------------------------------
+FROM python:3.13-slim AS builder
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    set -eux; \
+    python -m venv /opt/venv; \
+    /opt/venv/bin/pip install --upgrade pip setuptools wheel; \
+    /opt/venv/bin/pip install \
+        'aiogram~=3.31' \
+        'httpx~=0.28' \
+        'pydantic~=2.13'
+
+# --- Этап 2: runtime --------------------------------------------------------
+FROM python:3.13-slim AS runtime
+
+ARG LIFEOS_UID=10001
+ARG LIFEOS_GID=10001
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1 \
+    PATH="/opt/venv/bin:${PATH}" \
+    TZ=Europe/Moscow
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        sqlite3 \
+        tzdata; \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/venv /opt/venv
+
+WORKDIR /srv/lifeos
+
+RUN set -eux; \
+    groupadd --gid "${LIFEOS_GID}" lifeos; \
+    useradd --uid "${LIFEOS_UID}" --gid lifeos --no-create-home \
+            --shell /usr/sbin/nologin lifeos; \
+    mkdir -p /srv/lifeos/data /srv/lifeos/media /srv/lifeos/vault; \
+    chown -R lifeos:lifeos /srv/lifeos
+
+COPY --chown=lifeos:lifeos app/bot ./app/bot
+COPY --chown=lifeos:lifeos app/server ./app/server
+
+USER lifeos
+
+# Порт не публикуется: long polling — исходящие соединения, внутри backend.
+# Переход на webhook потребует EXPOSE и маршрута в Caddyfile.
+# EXPOSE 8080
+
+ENTRYPOINT ["python", "-m", "app.bot.main"]

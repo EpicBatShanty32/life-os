@@ -1,0 +1,357 @@
+# ============================================================================
+# Life OS v3 — продакшн-стек для VPS (путь А в DEPLOY_GUIDE.md).
+#
+# СТАТУС: артефакт написан по MASTER_SPEC.md §1–2, но НЕ ЗАПУСКАЛСЯ —
+#         в среде сборки нет docker (см. §0 «Реальность среды»).
+#         Синтаксис YAML проверен парсером, поведение контейнеров — нет.
+#
+# Что здесь есть (6 сервисов, как в ТЗ):
+#   lifeos-web       статика app/web/dist в nginx (unprivileged), :8080
+#   lifeos-api       FastAPI + uvicorn, :8787
+#   lifeos-bot       aiogram 3.x, long polling
+#   lifeos-worker    цикл очереди jobs (SQLite, MASTER_SPEC §0.4)
+#   telegram-bot-api локальный Bot API Server (файлы >20 МБ, свой лимит)
+#   caddy            80/443, auto-HTTPS Let's Encrypt, reverse proxy
+#
+# Тома (ровно 4, как в ТЗ): data, media, vault, caddy_data.
+# Данные telegram-bot-api — bind-mount в ./data/telegram-bot-api, чтобы не
+# добавлять пятый том и чтобы этот каталог было видно при бэкапе с хоста.
+#
+# Секретов в файле нет: всё через deploy/.env (шаблон — deploy/.env.example,
+# он в git с плейсхолдерами; сам .env в git не попадает).
+#
+# Запуск (из корня репозитория):
+#   cp deploy/.env.example deploy/.env && $EDITOR deploy/.env
+#   docker compose -f deploy/docker-compose.prod.yml up -d --build
+#   docker compose -f deploy/docker-compose.prod.yml ps
+#
+# `${VAR:?текст}` — обязательная переменная: если её нет в deploy/.env,
+# compose падает с понятным текстом, а не стартует полупустой стек.
+# ============================================================================
+
+name: lifeos-prod
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-hardening: &default-hardening
+  security_opt:
+    - no-new-privileges:true
+  logging: *default-logging
+
+# ----------------------------------------------------------------------------
+# Общие переменные API, бота и воркера.
+#
+# ВАЖНО про имена. Приложение (app/server/settings.py, Фаза 1) читает свой
+# набор LIFEOS_*: LIFEOS_ROOT, LIFEOS_DATA_DIR, LIFEOS_MEDIA_DIR, LIFEOS_VAULT,
+# LIFEOS_VAULT_WRITE, LIFEOS_LOGS_DIR, LIFEOS_DB_PATH, LIFEOS_TZ, LIFEOS_HOST,
+# LIFEOS_PORT, LIFEOS_TELEGRAM_TOKEN, LIFEOS_ADMIN_TELEGRAM_ID, LIFEOS_LLM_*.
+# В ТЗ и в deploy/.env общий набор короче: TELEGRAM_BOT_TOKEN, ADMIN_TELEGRAM_ID,
+# LIFEOS_VAULT_DIR. Поэтому передаём ОБА имени — контейнеру безразлично, а
+# приложение найдёт своё. Когда Фаза 4 зафиксирует номеклатуру, лишнее можно
+# убрать (см. DEPLOY_GUIDE §10, пункт 5).
+# ----------------------------------------------------------------------------
+x-lifeos-common-env: &lifeos-common-env
+  TZ: ${LIFEOS_TZ:-Europe/Moscow}
+  LIFEOS_ROOT: /srv/lifeos
+  LIFEOS_DATA_DIR: /srv/lifeos/data
+  LIFEOS_MEDIA_DIR: /srv/lifeos/media
+  LIFEOS_DB_PATH: /srv/lifeos/data/lifeos.db
+  LIFEOS_LOGS_DIR: /srv/lifeos/data/logs
+  # путь Obsidian-базы: LIFEOS_VAULT читает settings.py, LIFEOS_VAULT_DIR — .env
+  LIFEOS_VAULT: /srv/lifeos/vault
+  LIFEOS_VAULT_DIR: /srv/lifeos/vault
+  LIFEOS_VAULT_WRITE: ${LIFEOS_VAULT_WRITE:-true}
+  LIFEOS_TZ: ${LIFEOS_TZ:-Europe/Moscow}
+  LIFEOS_HOST: 0.0.0.0
+  LIFEOS_TELEGRAM_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN не задан — см. deploy/.env.example}
+  TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN не задан — см. deploy/.env.example}
+  LIFEOS_ADMIN_TELEGRAM_ID: ${ADMIN_TELEGRAM_ID:?ADMIN_TELEGRAM_ID не задан — см. deploy/.env.example}
+  ADMIN_TELEGRAM_ID: ${ADMIN_TELEGRAM_ID:?ADMIN_TELEGRAM_ID не задан — см. deploy/.env.example}
+  # Локальный Bot API Server: лимит файла 2 ГБ вместо 20 МБ у облачного.
+  # Внимание: settings.py пока берёт api_base только из config.json —
+  # переменная заработает, когда Фаза 2 её поддержит (DEPLOY_GUIDE §10).
+  TELEGRAM_API_BASE: ${TELEGRAM_API_BASE:-http://telegram-bot-api:8081}
+  # токен владельца (MASTER_SPEC §2.6): cookie в браузере + X-LifeOS-Token для API
+  LIFEOS_TOKEN: ${LIFEOS_TOKEN:?LIFEOS_TOKEN не задан — см. deploy/.env.example}
+  LIFEOS_LLM_ENABLED: ${LIFEOS_LLM_ENABLED:-true}
+  LIFEOS_LLM_BASE_URL: ${LIFEOS_LLM_BASE_URL:-}
+  LIFEOS_LLM_MODEL: ${LIFEOS_LLM_MODEL:-}
+  LIFEOS_LLM_API_KEY: ${LIFEOS_LLM_API_KEY:-}
+
+services:
+  # --------------------------------------------------------------------------
+  # 1. Статика SPA: lifeos-web (сборка app/web → nginx)
+  # --------------------------------------------------------------------------
+  lifeos-web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+    image: lifeos-web:${LIFEOS_TAG:-local}
+    container_name: lifeos-web
+    restart: unless-stopped
+    <<: *default-hardening
+    expose:
+      - "8080"
+    networks:
+      - edge
+    depends_on:
+      lifeos-api:
+        condition: service_healthy
+    healthcheck:
+      # nginx-unprivileged слушает 8080; busybox wget есть в alpine-образе.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/index.html || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # --------------------------------------------------------------------------
+  # 2. API: FastAPI + uvicorn (MASTER_SPEC §2.2)
+  # --------------------------------------------------------------------------
+  lifeos-api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+      args:
+        # true = ffmpeg + faster-whisper в образе (+~1.2 ГБ, сборка 5-10 мин).
+        # Воркер использует этот же образ (см. lifeos-worker).
+        WITH_WHISPER: ${WITH_WHISPER:-false}
+    image: lifeos-api:${LIFEOS_TAG:-local}
+    container_name: lifeos-api
+    restart: unless-stopped
+    <<: *default-hardening
+    cap_drop:
+      - ALL
+    environment:
+      <<: *lifeos-common-env
+      LIFEOS_ROLE: api
+      LIFEOS_PORT: "8787"
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_MODEL_PATH: /srv/lifeos/data/whisper
+    volumes:
+      - data:/srv/lifeos/data
+      - media:/srv/lifeos/media
+      - vault:/srv/lifeos/vault
+    expose:
+      - "8787"
+    networks:
+      - edge
+      - backend
+    depends_on:
+      # Bot API Server нужен только для отправки сообщений/файлов из API.
+      # service_started, а не service_healthy: у этого образа нет надёжной
+      # пробы (см. комментарий в сервисе telegram-bot-api), и ждать healthy
+      # значило бы повесить весь стек.
+      telegram-bot-api:
+        condition: service_started
+    healthcheck:
+      # Проверяется «сервер отвечает по HTTP», а не бизнес-логика:
+      # любой код ответа (включая 401 без токена) означает, что uvicorn жив.
+      # Смысл: контейнер не должен оставаться «running» при упавшем воркере.
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import http.client as h;
+          c = h.HTTPConnection('127.0.0.1', 8787, timeout=4);
+          c.request('GET', '/api/overview');
+          print('HTTP', c.getresponse().status)"
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 40s
+    stop_grace_period: 20s
+
+  # --------------------------------------------------------------------------
+  # 3. Бот: aiogram 3.x (MASTER_SPEC §2.3)
+  # --------------------------------------------------------------------------
+  lifeos-bot:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.bot
+    image: lifeos-bot:${LIFEOS_TAG:-local}
+    container_name: lifeos-bot
+    restart: unless-stopped
+    <<: *default-hardening
+    cap_drop:
+      - ALL
+    environment:
+      <<: *lifeos-common-env
+      LIFEOS_ROLE: bot
+    volumes:
+      - data:/srv/lifeos/data
+      - media:/srv/lifeos/media
+      - vault:/srv/lifeos/vault
+    networks:
+      - backend
+    depends_on:
+      lifeos-api:
+        condition: service_healthy
+      telegram-bot-api:
+        condition: service_started
+    healthcheck:
+      # У long-polling нет порта: проверяем, что процесс держит токен и видит БД.
+      # Это ловит типовые поломки (пустой .env, не смонтирован data), но не
+      # доказывает, что Telegram отвечает — см. DEPLOY_GUIDE §8.
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import os, sqlite3;
+          assert os.environ.get('TELEGRAM_BOT_TOKEN'), 'нет токена';
+          c = sqlite3.connect('file:' + os.environ['LIFEOS_DB_PATH'] + '?mode=ro', uri=True);
+          c.execute('select count(*) from jobs').fetchone();
+          print('ok')"
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    stop_grace_period: 15s
+
+  # --------------------------------------------------------------------------
+  # 4. Воркер: очередь jobs (MASTER_SPEC §0.4 — SQLite вместо Redis/Celery)
+  # --------------------------------------------------------------------------
+  lifeos-worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.api
+    image: lifeos-api:${LIFEOS_TAG:-local}
+    container_name: lifeos-worker
+    restart: unless-stopped
+    <<: *default-hardening
+    cap_drop:
+      - ALL
+    # Тот же образ, что у API: код один, меняется точка входа.
+    entrypoint: ["python", "-m", "app.worker.main"]
+    environment:
+      <<: *lifeos-common-env
+      LIFEOS_ROLE: worker
+      LIFEOS_PORT: "8787"
+      # faster-whisper лежит в образе API (Dockerfile.api, ARG WITH_WHISPER)
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_MODEL_PATH: /srv/lifeos/data/whisper
+      FFMPEG_BIN: ${FFMPEG_BIN:-ffmpeg}
+    volumes:
+      - data:/srv/lifeos/data
+      - media:/srv/lifeos/media
+      - vault:/srv/lifeos/vault
+    networks:
+      - backend
+    depends_on:
+      lifeos-api:
+        condition: service_healthy
+    healthcheck:
+      # Воркер жив, если БД читается и таблица jobs отвечает (MASTER_SPEC §0.4).
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import os, sqlite3;
+          c = sqlite3.connect('file:' + os.environ['LIFEOS_DB_PATH'] + '?mode=ro', uri=True);
+          print(c.execute('select count(*) from jobs').fetchone())"
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    # Дать дожать текущую задачу (транскрибация длинного видео).
+    stop_grace_period: 120s
+
+  # --------------------------------------------------------------------------
+  # 5. Локальный Telegram Bot API Server
+  # --------------------------------------------------------------------------
+  telegram-bot-api:
+    # Тег :latest не закреплён: оффлайн-среды, где можно было бы узнать digest,
+    # нет. Перед продакшеном зафиксируйте версию:
+    #   docker pull aiogram/telegram-bot-api:latest
+    #   docker inspect --format '{{index .RepoDigests 0}}' aiogram/telegram-bot-api:latest
+    # и подставьте образ по digest (@sha256:...) — иначе обновление базового
+    # образа может изменить поведение без вашего участия.
+    image: aiogram/telegram-bot-api:latest
+    container_name: telegram-bot-api
+    restart: unless-stopped
+    <<: *default-hardening
+    environment:
+      TZ: ${LIFEOS_TZ:-Europe/Moscow}
+      # my.telegram.org → API development tools. Без них сервер не стартует.
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:?TELEGRAM_API_ID не задан — см. deploy/.env.example}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:?TELEGRAM_API_HASH не задан — см. deploy/.env.example}
+      TELEGRAM_LOCAL: "1"
+    command:
+      - --api-id=${TELEGRAM_API_ID}
+      - --api-hash=${TELEGRAM_API_HASH}
+      - --local
+      - --http-port=8081
+      - --dir=/var/lib/telegram-bot-api
+    volumes:
+      # bind, а не именованный том: файлы нужны и бэкапу с хоста (DEPLOY_GUIDE §5)
+      - ../data/telegram-bot-api:/var/lib/telegram-bot-api
+    expose:
+      - "8081"
+    networks:
+      - backend
+    # healthcheck намеренно отсутствует: у образа нет своей пробы, а
+    # wget/nc по 8081 даёт ложные «unhealthy» (сервер отвечает 404 на /).
+    # Зависимые сервисы ждут service_started. См. DEPLOY_GUIDE §8.
+
+  # --------------------------------------------------------------------------
+  # 6. Caddy: 80/443, auto-HTTPS, reverse proxy, gzip/zstd, security-заголовки
+  # --------------------------------------------------------------------------
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: caddy
+    restart: unless-stopped
+    environment:
+      TZ: ${LIFEOS_TZ:-Europe/Moscow}
+      LIFEOS_DOMAIN: ${LIFEOS_DOMAIN:?LIFEOS_DOMAIN не задан — см. deploy/.env.example}
+      ACME_EMAIL: ${ACME_EMAIL:?ACME_EMAIL не задан — см. deploy/.env.example}
+      MEDIA_MAX_UPLOAD: ${MEDIA_MAX_UPLOAD:-2GB}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    networks:
+      - edge
+    depends_on:
+      lifeos-web:
+        condition: service_healthy
+      lifeos-api:
+        condition: service_healthy
+    healthcheck:
+      # Admin API слушает только localhost — снаружи недоступен.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging: *default-logging
+
+# ----------------------------------------------------------------------------
+# Сети: edge — то, что видно Caddy; backend — обмен API/бот/воркер/Bot API.
+# backend без internal:true: сервисам нужен исходящий трафик (Telegram, LLM).
+# ----------------------------------------------------------------------------
+networks:
+  edge:
+    name: lifeos-edge
+  backend:
+    name: lifeos-backend
+
+# ----------------------------------------------------------------------------
+# Тома. data/media/vault — данные (бэкапить, DEPLOY_GUIDE §5),
+# caddy_data — сертификаты и ключи ACME (бэкапить обязательно, иначе
+# после пересоздания контейнера будет новый запрос к Let's Encrypt).
+# vault: для живой Obsidian-базы замените на bind-mount, пример — в гайде §4:
+#   - ${OBSIDIAN_VAULT_PATH}:/srv/lifeos/vault
+# ----------------------------------------------------------------------------
+volumes:
+  data:
+    name: lifeos-data
+  media:
+    name: lifeos-media
+  vault:
+    name: lifeos-vault
+  caddy_data:
+    name: lifeos-caddy-data

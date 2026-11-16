@@ -1,0 +1,66 @@
+# ============================================================================
+# Life OS v3 — бот (aiogram 3.x, long polling) под systemd.
+#
+# СТАТУС: не проверено — systemd в среде сборки нет (macOS).
+#
+# Установка:
+#   sudo cp deploy/lifeos-bot.service /etc/systemd/system/lifeos-bot.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now lifeos-bot.service
+#
+# Зависит от жизни API (бот пишет через общий SQLite и ходит в API для
+# событий WebSocket/уведомлений). Если API не поднялся — бот всё равно
+# стартует (Wants, а не Requires): приём сообщений важнее, чем UI.
+# ============================================================================
+
+[Unit]
+Description=Life OS v3 bot (aiogram, long polling)
+Documentation=file:///srv/lifeos/DEPLOY_GUIDE.md
+After=network-online.target lifeos.service
+Wants=network-online.target lifeos.service
+
+# 0 = без лимита перезапусков (Restart=always, бот должен жить).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=lifeos
+Group=lifeos
+UMask=0077
+WorkingDirectory=/srv/lifeos/app
+
+EnvironmentFile=/etc/lifeos/lifeos.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# TELEGRAM_API_BASE в lifeos.env может указывать на локальный Bot API Server
+# (http://127.0.0.1:8081) — тогда файлы до 2 ГБ. Без него бот идёт в
+# api.telegram.org (лимит 20 МБ).
+ExecStart=/srv/lifeos/.venv/bin/python -m app.bot.main
+
+# Бот должен жить всегда: сеть моргнула, Telegram отдал 502 — перезапуск.
+Restart=always
+RestartSec=5
+TimeoutStopSec=15
+KillSignal=SIGTERM
+
+# --- Ограничения -----------------------------------------------------------
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ReadWritePaths=/srv/lifeos/data /srv/lifeos/media /srv/lifeos/vault
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lifeos-bot
+
+[Install]
+WantedBy=multi-user.target

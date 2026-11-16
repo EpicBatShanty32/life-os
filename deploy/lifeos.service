@@ -1,0 +1,90 @@
+# ============================================================================
+# Life OS v3 — API под systemd (путь Б: «домашний мини-сервер»).
+#
+# СТАТУС: не проверено — в среде сборки нет systemd (macOS). Синтаксис
+#         сверен с systemd.unit(5)/systemd.exec(5); `systemd-analyze verify`
+#         не запускался, потому что его здесь нет.
+#
+# Куда положить (Linux):
+#   sudo cp deploy/lifeos.service /etc/systemd/system/lifeos.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now lifeos.service
+#
+# Требует пользователя lifeos и каталоги:
+#   /srv/lifeos/app       код (app/server, app/web/dist)
+#   /srv/lifeos/.venv     виртуальное окружение с зависимостями
+#   /srv/lifeos/data      SQLite: lifeos.db (+ WAL)
+#   /srv/lifeos/media     видео и аудио курсов
+#   /srv/lifeos/vault     Obsidian-база (или проброс в другое место)
+#   /etc/lifeos/lifeos.env  переменные окружения, режим 600, владелец lifeos
+#
+# В файле намеренно нет секретов: всё в EnvironmentFile.
+# ============================================================================
+
+[Unit]
+Description=Life OS v3 API (FastAPI + uvicorn)
+Documentation=file:///srv/lifeos/DEPLOY_GUIDE.md
+# network-online.target, а не network.target: бот и API должны пережить
+# ситуацию «сеть появилась позже сервиса» (характерно для домашнего сервера).
+After=network-online.target
+Wants=network-online.target
+
+# Не бесконечно: если приложение падает 10 раз за минуту — это баг, а не
+# случайность, и пусть systemd остановится, чтобы ошибка была видна.
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=lifeos
+Group=lifeos
+UMask=0077
+WorkingDirectory=/srv/lifeos/app
+
+# Переменные: LIFEOS_TOKEN, ADMIN_TELEGRAM_ID, TELEGRAM_BOT_TOKEN,
+# LIFEOS_DATA_DIR, LIFEOS_MEDIA_DIR, LIFEOS_VAULT_DIR, LIFEOS_LLM_* (см.
+# deploy/.env.example). Файл должен быть 0600 и принадлежать lifeos.
+EnvironmentFile=/etc/lifeos/lifeos.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=LIFEOS_PORT=8787
+
+# Слушаем только петлю: наружу выходит Caddy/systemd не даёт порт в интернет.
+# Tailscale/Cloudflare Tunnel подключаются к 127.0.0.1:8787 (DEPLOY_GUIDE §2).
+# Если nginx/caddy на этой же машине — тоже 127.0.0.1, без 0.0.0.0.
+ExecStart=/srv/lifeos/.venv/bin/uvicorn app.server.main:app \
+    --host 127.0.0.1 \
+    --port 8787 \
+    --proxy-headers \
+    --forwarded-allow-ips 127.0.0.1 \
+    --no-server-header
+
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillSignal=SIGTERM
+
+# --- Ограничения -----------------------------------------------------------
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+# Разрешённая запись — только данные. Если Obsidian-база живёт вне /srv
+# (например ~/Obsidian/...), добавьте её сюда отдельной строкой, иначе
+# vault будет read-only и запись заметок упадёт с Permission denied.
+ReadWritePaths=/srv/lifeos/data /srv/lifeos/media /srv/lifeos/vault
+
+# Логи — в journald: journalctl -u lifeos.service -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=lifeos-api
+
+[Install]
+WantedBy=multi-user.target

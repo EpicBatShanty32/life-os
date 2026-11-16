@@ -1,0 +1,105 @@
+# syntax=docker/dockerfile:1.7
+# ============================================================================
+# Life OS v3 — образ API (FastAPI + uvicorn) и воркера (тот же образ, другая
+# точка входа: docker-compose.prod.yml → lifeos-worker).
+#
+# СТАТУС: не собрано и не запущено — в среде нет docker (MASTER_SPEC §0).
+#         Проверено статически: этапы FROM, USER, kuid 10001, cache-mount,
+#         источники COPY (см. deploy/check-deploy.sh).
+#
+# Два этапа:
+#   builder — venv с зависимостями (кэш pip между сборками);
+#   runtime — только venv + код, без pip-кэша и сборочного мусора (~250 МБ).
+#
+# ВАЖНО: собирается из app/server и app/worker (MASTER_SPEC §1). Пока Фазы
+# 1/4 не сданы, COPY упадёт — это ожидаемо, а не дефект Dockerfile.
+#
+# Сборка:
+#   docker build -f deploy/Dockerfile.api -t lifeos-api:local .
+#   docker build -f deploy/Dockerfile.api --build-arg WITH_WHISPER=true -t lifeos-api:local .
+# ============================================================================
+
+# --- Этап 1: зависимости в отдельном venv -----------------------------------
+FROM python:3.13-slim AS builder
+
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+# WITH_WHISPER=true добавляет ffmpeg + faster-whisper (~1.2 ГБ, сборка 5–10 мин).
+# По умолчанию false: без toolchain пайплайн уходит в NullTranscriber и
+# честно показывает статус pending_toolchain (MASTER_SPEC §0.2).
+ARG WITH_WHISPER=false
+
+# Версии зафиксированы по MASTER_SPEC §0. Кэш pip сохраняется между сборками
+# через --mount=type=cache (BuildKit включён по умолчанию в compose v2).
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    set -eux; \
+    python -m venv /opt/venv; \
+    /opt/venv/bin/pip install --upgrade pip setuptools wheel; \
+    /opt/venv/bin/pip install \
+        'fastapi~=0.162' \
+        'uvicorn[standard]~=0.54' \
+        'pydantic~=2.13' \
+        'httpx~=0.28' \
+        'python-multipart~=0.0.20'; \
+    if [ "$WITH_WHISPER" = "true" ]; then \
+        /opt/venv/bin/pip install 'faster-whisper~=1.1'; \
+    fi
+
+# --- Этап 2: минимальный runtime --------------------------------------------
+FROM python:3.13-slim AS runtime
+
+ARG WITH_WHISPER=false
+ARG LIFEOS_UID=10001
+ARG LIFEOS_GID=10001
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONFAULTHANDLER=1 \
+    PATH="/opt/venv/bin:${PATH}" \
+    TZ=Europe/Moscow
+
+# Только рантайм-пакеты: ca-certificates (HTTPS к Telegram/LLM), sqlite3 CLI
+# (диагностика бэкапа), tzdata (правила часового пояса). ffmpeg — лишь при
+# включённой транскрибации.
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        sqlite3 \
+        tzdata; \
+    if [ "$WITH_WHISPER" = "true" ]; then \
+        apt-get install -y --no-install-recommends ffmpeg; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /opt/venv /opt/venv
+
+WORKDIR /srv/lifeos
+
+# Непривилегированный пользователь: uid/gid 10001 фиксированы, чтобы права
+# на тома data/media/vault не менялись между пересборками. Домашнего
+# каталога нет: писать приложению некуда, кроме /srv/lifeos.
+RUN set -eux; \
+    groupadd --gid "${LIFEOS_GID}" lifeos; \
+    useradd --uid "${LIFEOS_UID}" --gid lifeos --no-create-home \
+            --shell /usr/sbin/nologin lifeos; \
+    mkdir -p /srv/lifeos/data /srv/lifeos/media /srv/lifeos/vault; \
+    chown -R lifeos:lifeos /srv/lifeos
+
+# Код — последним слоем: правка кода не сбрасывает кэш зависимостей.
+COPY --chown=lifeos:lifeos app/server ./app/server
+COPY --chown=lifeos:lifeos app/worker ./app/worker
+
+USER lifeos
+
+EXPOSE 8787
+
+# --proxy-headers: за Caddy в логах реальный IP, а не 127.0.0.1.
+# --no-server-header: не афишировать uvicorn.
+ENTRYPOINT ["uvicorn", "app.server.main:app", \
+            "--host", "0.0.0.0", \
+            "--port", "8787", \
+            "--proxy-headers", \
+            "--forwarded-allow-ips", "*", \
+            "--no-server-header"]

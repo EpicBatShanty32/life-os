@@ -1,0 +1,77 @@
+# ============================================================================
+# Контекст сборки для deploy/Dockerfile.* (build context = корень репозитория,
+# потому что Dockerfile'ам нужны app/server, app/bot, app/worker, app/web).
+#
+# Цель — не тащить в образ и в build-context личное и тяжёлое:
+# секреты, базу, медиа, скриншоты, .git.
+#
+# СТАТУС: не проверено — docker в среде нет; правила написаны по
+# документации Docker (`.dockerignore` в корне контекста).
+# ============================================================================
+
+# --- Секреты: в образ попадать не должны ни при каких условиях ---------------
+deploy/.env
+config/config.json
+*.pem
+*.key
+.env
+.env.*
+
+# --- Git и служебное ---------------------------------------------------------
+.git
+.gitignore
+.gitattributes
+.DS_Store
+**/.DS_Store
+
+# --- Данные приложения (база, медиа, логи, вложения telegram-bot-api) --------
+data/
+media/
+vault/
+dashboard/data.json
+dashboard/index.html
+demo/
+logs/
+*.db
+*.db-wal
+*.db-shm
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# --- Node --------------------------------------------------------------------
+node_modules/
+**/node_modules/
+app/web/dist/
+app/web/.vite/
+*.log
+npm-debug.log*
+
+# --- Документация и материалы, не нужные образу ------------------------------
+# (Dockerfile'ы читают только deploy/nginx-web.conf и код в app/.)
+studio/
+tests/
+demo/
+ops/
+tools/
+dashboard/
+src/
+*.md
+!app/**/*.md
+
+# --- Прочее ------------------------------------------------------------------
+*.zip
+*.tar
+*.tar.gz
+*.mp4
+*.mov
+*.m4a
+*.wav
