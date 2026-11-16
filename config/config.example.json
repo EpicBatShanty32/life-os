@@ -1,0 +1,53 @@
+{
+  "telegram": {
+    "token": "",
+    "allowed_chat_id": 0,
+    "api_base": "https://api.telegram.org"
+  },
+  "obsidian": {
+    "enabled": true,
+    "vault_path": "/Users/user/Documents/чисто лайфик обсидиан/чисто лайфик",
+    "daily_folder": "01 Daily",
+    "template_path": "Шаблоны/Шаблон - День.md",
+    "goals_path": "Проекты/Life OS/Цели.md",
+    "data_folder": "Life OS/data",
+    "write_mirror": true
+  },
+  "llm": {
+    "enabled": true,
+    "base_url": "https://api.samp.team/v1",
+    "model": "deepseek-v4.1-flash-1017",
+    "api_key": "",
+    "timeout": 60,
+    "max_followups": 2
+  },
+  "schedule": {
+    "morning": {
+      "time": "08:30",
+      "enabled": true
+    },
+    "midday": {
+      "time": "14:00",
+      "enabled": true
+    },
+    "evening": {
+      "time": "21:30",
+      "enabled": true
+    },
+    "weekly": {
+      "time": "21:00",
+      "weekday": 6,
+      "enabled": false
+    }
+  },
+  "paths": {
+    "db": "data/lifeos.db",
+    "logs": "data/logs",
+    "dashboard_out": "dashboard/index.html"
+  },
+  "app": {
+    "name": "Life OS",
+    "timezone": "Europe/Moscow",
+    "lang": "ru"
+  }
+}

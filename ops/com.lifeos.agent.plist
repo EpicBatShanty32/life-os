@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Шаблон LaunchAgent для Life OS.
+  install.sh подставляет вместо __APP_DIR__ и __LOG_DIR__ реальные пути:
+    __APP_DIR__ → ~/Library/Application Support/LifeOS
+    __LOG_DIR__ → ~/Library/Logs/LifeOS
+  Не редактируй этот файл: правится config.json, после чего install.sh с флагом reload.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.lifeos.agent</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/python3</string>
+		<string>src/main.py</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>__APP_DIR__</string>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>__LOG_DIR__/agent.log</string>
+	<key>StandardErrorPath</key>
+	<string>__LOG_DIR__/agent.log</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+		<key>PATH</key>
+		<string>/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
+</dict>
+</plist>

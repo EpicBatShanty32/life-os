@@ -1,0 +1,235 @@
+"""Клиент Telegram Bot API на стандартной библиотеке (urllib).
+
+Реализует ровно то, что нужно агенту: long polling ``getUpdates`` и отправка
+текстовых сообщений с разбивкой длинных текстов. Все ошибки упаковываются в
+``TelegramError`` — вызывающий код (планировщик, main) решает, что делать:
+429/409 — backoff, 401/403 — сообщить о проблеме с токеном, сеть — повторить.
+
+Секреты: токен никогда не попадает в тексты исключений и в repr объекта.
+"""
+
+from __future__ import annotations
+
+import json
+import socket
+import urllib.error
+import urllib.request
+
+__all__ = ["Telegram", "TelegramError", "split_message", "MAX_MESSAGE_LEN"]
+
+# Telegram режет сообщения длиннее 4096 символов; берём с запасом.
+MAX_MESSAGE_LEN = 4000
+
+
+class TelegramError(Exception):
+    """Ошибка обращения к Telegram Bot API.
+
+    Attributes:
+        message: человекочитаемое описание (без токена!).
+        status: HTTP-статус или ``error_code`` от Telegram, если известен.
+        retry_after: сколько секунд подождать (для 429), если Telegram сообщил.
+    """
+
+    def __init__(self, message: str, status: int | None = None,
+                 retry_after: float | None = None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.status = status
+        self.retry_after = retry_after
+
+    def __str__(self) -> str:  # чтобы логи читались без скобок кортежа
+        return self.message
+
+
+def split_message(text: str, limit: int = MAX_MESSAGE_LEN) -> list[str]:
+    """Режет текст на части длиной не больше ``limit`` по границам строк.
+
+    Длинная строка без переводов строк режется жёстко. Пустые куски не
+    возвращаются; текст короче лимита возвращается одним элементом.
+    """
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+
+    parts: list[str] = []
+    current = ""
+    for line in text.split("\n"):
+        # Строка сама длиннее лимита — режем её жёстко.
+        while len(line) > limit:
+            if current:
+                parts.append(current)
+                current = ""
+            parts.append(line[:limit])
+            line = line[limit:]
+        candidate = line if not current else current + "\n" + line
+        if len(candidate) > limit and current:
+            parts.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        parts.append(current)
+    return [part for part in parts if part]
+
+
+class Telegram:
+    """Минимальный клиент Bot API: ``call``, ``send``, ``get_updates``.
+
+    POST идёт с JSON-телом (Bot API это принимает) — так проще и надёжнее,
+    чем form-encoded с вложенным JSON.
+    """
+
+    def __init__(self, token: str, api_base: str = "https://api.telegram.org") -> None:
+        if not token or not str(token).strip():
+            raise TelegramError(
+                "Пустой токен Telegram-бота. Укажите telegram.token в config/config.json "
+                "(токен выдаёт @BotFather)."
+            )
+        self._token = str(token).strip()
+        self.api_base = (api_base or "https://api.telegram.org").strip().rstrip("/")
+        self.timeout = 60
+
+    def __repr__(self) -> str:  # токен не показываем даже в отладке
+        return "Telegram(api_base=%r, token=***)" % (self.api_base,)
+
+    # ------------------------------------------------------------------ API
+    def _url(self, method: str) -> str:
+        return "%s/bot%s/%s" % (self.api_base, self._token, method)
+
+    def call(self, method: str, payload: dict | None = None,
+             timeout: int = 60) -> dict:
+        """Вызывает метод Bot API и возвращает поле ``result``.
+
+        Raises:
+            TelegramError: при ошибке сети, любом HTTP-статусе != 200 или
+                ``ok: false`` в ответе. Для 429 заполняется ``retry_after``.
+        """
+        body = payload if payload is not None else {}
+        data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            self._url(method),
+            data=data,
+            method="POST",
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "Accept": "application/json",
+                "User-Agent": "LifeOS/1.0 (+python-urllib)",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                raw = response.read()
+        except urllib.error.HTTPError as exc:
+            # Тело ошибки Telegram — JSON {"ok": false, "description": ...}.
+            raw = b""
+            try:
+                raw = exc.read()
+            except Exception:  # noqa: BLE001 - тело ошибки может не прочитаться
+                pass
+            status = int(exc.code)
+            description = ""
+            retry_after: float | None = None
+            try:
+                parsed = json.loads(raw.decode("utf-8", "replace"))
+                if isinstance(parsed, dict):
+                    description = str(parsed.get("description") or "")
+                    parameters = parsed.get("parameters") or {}
+                    if parameters.get("retry_after") is not None:
+                        retry_after = float(parameters["retry_after"])
+            except (ValueError, TypeError):
+                pass
+            if not description:
+                description = "HTTP %s" % status
+            if status == 429:
+                raise TelegramError(
+                    "Telegram ограничил частоту запросов (429): %s" % description,
+                    status=status, retry_after=retry_after,
+                ) from None
+            if status == 409:
+                raise TelegramError(
+                    "Конфликт getUpdates (409): вероятно, запущен второй экземпляр бота. %s"
+                    % description,
+                    status=status, retry_after=retry_after,
+                ) from None
+            if status in (401, 403):
+                raise TelegramError(
+                    "Telegram отклонил запрос (%s): проверьте telegram.token и доступ к чату. %s"
+                    % (status, description),
+                    status=status,
+                ) from None
+            raise TelegramError(
+                "Ошибка Telegram API (%s): %s" % (status, description),
+                status=status, retry_after=retry_after,
+            ) from None
+        except (urllib.error.URLError, socket.timeout, TimeoutError,
+                ConnectionError, OSError) as exc:
+            reason = getattr(exc, "reason", None) or exc
+            raise TelegramError(
+                "Нет связи с Telegram (метод %s): %s" % (method, reason)
+            ) from None
+
+        if not raw:
+            raise TelegramError("Пустой ответ Telegram API (метод %s)" % method)
+        try:
+            parsed = json.loads(raw.decode("utf-8", "replace"))
+        except ValueError:
+            raise TelegramError(
+                "Не удалось разобрать ответ Telegram (метод %s)" % method
+            ) from None
+        if not isinstance(parsed, dict):
+            raise TelegramError("Неожиданный формат ответа Telegram (метод %s)" % method)
+        if not parsed.get("ok"):
+            status = parsed.get("error_code")
+            retry_after = None
+            parameters = parsed.get("parameters") or {}
+            if parameters.get("retry_after") is not None:
+                retry_after = float(parameters["retry_after"])
+            raise TelegramError(
+                "Telegram вернул ошибку (метод %s): %s"
+                % (method, parsed.get("description") or "без описания"),
+                status=int(status) if isinstance(status, int) else None,
+                retry_after=retry_after,
+            )
+        return parsed.get("result")
+
+    def send(self, chat_id: int, text: str) -> None:
+        """Отправляет текст; длиннее 4000 символов — несколькими сообщениями."""
+        if text is None:
+            return
+        text = str(text)
+        if not text.strip():
+            return
+        for chunk in split_message(text):
+            self.call(
+                "sendMessage",
+                {
+                    "chat_id": chat_id,
+                    "text": chunk,
+                    "disable_web_page_preview": True,
+                },
+                timeout=30,
+            )
+
+    def get_updates(self, offset: int | None, timeout: int = 20) -> list[dict]:
+        """long polling getUpdates.
+
+        Args:
+            offset: id последнего обработанного апдейта + 1 (или None).
+            timeout: сколько секунд Telegram может держать запрос (0 — сразу).
+
+        Returns:
+            Список апдейтов (пустой при таймауте).
+        """
+        payload: dict = {
+            "timeout": int(timeout),
+            "allowed_updates": ["message"],
+        }
+        if offset is not None:
+            payload["offset"] = int(offset)
+        # HTTP-таймаут должен быть заметно больше long-poll таймаута.
+        http_timeout = max(int(timeout) + 15, 20)
+        result = self.call("getUpdates", payload, timeout=http_timeout)
+        if isinstance(result, list):
+            return result
+        return []
