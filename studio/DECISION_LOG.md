@@ -325,3 +325,48 @@ goal 2: "Пробежать 10 км",   target "10",    current "3"   → progre
 
 **Где видно:** `REVIEW.md`, `SECURITY_AUDIT.md`, `ADVERSARIAL_REPORT.md`,
 `RELEASE_NOTES.md` (реестр), `QUALITY_BACKLOG.md` QB-11…QB-22.
+
+---
+
+## D-15 · База v3 живёт отдельным файлом, историческая v0.x не переносится
+
+**Дата:** 2026-11-17 (00:42) · **Статус:** принято
+
+**Решение.** Ветка v3 (`app/`) использует отдельную базу — по умолчанию в разработке
+`data/lifeos-v3.db` (через `LIFEOS_DB_PATH` / `paths.db`). Существующая `data/lifeos.db`
+(схема v0.x, бот) не мигрируется и не открывается v3 на запись.
+
+**Причина.** `app/server/db.py:migrate()` идемпотентна по `PRAGMA user_version` и
+защищает старую схему (`LegacySchemaError`). Перенос 120 дней живых данных — отдельная
+задача (не в v3-скопе), а переписать боевой файл нечем было бы откатить.
+
+**Следствия.**
+- Сидер (t10) и API (t7) работают на `data/lifeos-v3.db`; деплой переопределяет путь
+  через `LIFEOS_DB_PATH`.
+- Миграция v0.x → v3 по желанию пользователя — в бэклоге, не в релизе.
+
+**Где видно:** `app/server/settings.py` (LIFEOS_DB_PATH), `app/server/db.py`,
+`deploy/docker-compose.prod.yml`.
+
+---
+
+## D-16 · Расхождение имён env в deploy закрыто мостом «оба набора»
+
+**Дата:** 2026-11-17 (00:42) · **Статус:** принято
+
+**Решение.** `settings.py` читает `LIFEOS_TELEGRAM_TOKEN` / `LIFEOS_ADMIN_TELEGRAM_ID`
+/ `LIFEOS_VAULT`, а ТЗ и `deploy/.env.example` говорят `TELEGRAM_BOT_TOKEN` /
+`ADMIN_TELEGRAM_ID` / `LIFEOS_VAULT_DIR`. Вместо переименования — блок
+`x-lifeos-common-env` в compose передаёт оба набора переменных.
+
+**Причина.** Боевой токен у пользователя один, а переименование env ломает запуск по
+инструкциям из ТЗ. Мост в compose дешевле и обратим.
+
+**Следствия.**
+- `telegram.api_base` из env сейчас не читается (локальный Bot API Server на 2 ГБ
+  заработает только с поддержкой env или монтированием `config.json`) — в бэклог,
+  исполнитель t8 решает.
+- Нормализация имён переменных — после v3-релиза, одним коммитом.
+
+**Где видно:** `deploy/docker-compose.prod.yml` (`x-lifeos-common-env`),
+`app/server/settings.py`, `DEPLOY_GUIDE.md` §10.
