@@ -72,7 +72,16 @@ if (storedToken) {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
+/**
+ * Низкоуровневый запрос к API для страниц-модулей v4.
+ * Тот же контракт, что у внутренних вызовов: JSON, токен владельца,
+ * AbortController, таймаут по умолчанию 3 с.
+ */
+export async function apiRequest<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<T> {
   const controller = new AbortController();
   const timer = window.setTimeout(() => controller.abort(), timeoutMs);
   const headers = new Headers(init?.headers);
@@ -319,7 +328,7 @@ export interface FetchedOverview {
 /** GET /api/overview с фолбэком на демо-данные (Ф4 ещё может быть не готов). */
 export async function fetchOverview(): Promise<FetchedOverview> {
   try {
-    const raw = await request<unknown>('/overview', undefined, 2500);
+    const raw = await apiRequest<unknown>('/overview', undefined, 2500);
     return { data: normalizeOverview(raw), source: 'api' };
   } catch {
     return { data: createMockOverview(), source: 'mock' };
@@ -367,7 +376,7 @@ function saveLocalQuickEntry(input: QuickEntryInput): void {
 export async function postWater(ml: number): Promise<PostResult> {
   const date = toLocalIso();
   try {
-    await request('/water', { method: 'POST', body: JSON.stringify({ ml, date }) }, 3000);
+    await apiRequest('/water', { method: 'POST', body: JSON.stringify({ ml, date }) }, 3000);
     return { ok: true, source: 'api' };
   } catch {
     addLocalWater(date, ml);
@@ -378,7 +387,7 @@ export async function postWater(ml: number): Promise<PostResult> {
 /** POST /api/quick; при недоступном API запись остаётся в локальном демо-буфере. */
 export async function postQuick(input: QuickEntryInput): Promise<PostResult> {
   try {
-    await request('/quick', { method: 'POST', body: JSON.stringify(input) }, 4000);
+    await apiRequest('/quick', { method: 'POST', body: JSON.stringify(input) }, 4000);
     return { ok: true, source: 'api' };
   } catch {
     saveLocalQuickEntry(input);

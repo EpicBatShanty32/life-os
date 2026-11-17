@@ -1,4 +1,5 @@
-/* Базовые стили: reset, типографика, доступность, фоновое свечение. */
+/* Базовые стили: reset, типографика, доступность.
+   v4: без цветных свечений и «мягких» фонов — только бумага и линии. */
 
 *,
 *::before,
@@ -18,37 +19,18 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-sans);
-  font-size: 15px;
+  font-size: var(--text-body-size);
   line-height: 1.5;
   font-feature-settings: 'kern' 1, 'liga' 1;
+  font-variant-numeric: tabular-nums;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-}
-
-/* Мягкое цветное свечение фона — только CSS, без изображений. */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background:
-    radial-gradient(880px 520px at 84% -10%, rgba(161, 139, 183, 0.14), transparent 62%),
-    radial-gradient(720px 480px at 12% 108%, rgba(185, 203, 232, 0.18), transparent 64%),
-    radial-gradient(560px 420px at 52% 42%, rgba(174, 222, 194, 0.07), transparent 70%);
-}
-
-[data-theme='dark'] body::before {
-  background:
-    radial-gradient(880px 520px at 84% -10%, rgba(161, 139, 183, 0.16), transparent 62%),
-    radial-gradient(720px 480px at 12% 108%, rgba(185, 203, 232, 0.1), transparent 64%),
-    radial-gradient(560px 420px at 52% 42%, rgba(174, 222, 194, 0.05), transparent 70%);
+  touch-action: manipulation;
 }
 
 #root {
   position: relative;
-  z-index: 1;
   min-height: 100svh;
 }
 
@@ -61,6 +43,13 @@ figure,
 dl,
 dd {
   margin: 0;
+  text-wrap: pretty;
+}
+
+h1,
+h2,
+h3 {
+  text-wrap: balance;
 }
 
 ul,
@@ -111,11 +100,11 @@ b {
 :focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
-  border-radius: var(--radius-sm);
+  border-radius: var(--r-sm);
 }
 
 ::selection {
-  background: rgba(161, 139, 183, 0.32);
+  background: var(--selection);
   color: var(--text);
 }
 
@@ -126,15 +115,16 @@ b {
 /* Ссылка «к содержимому» — видна только при фокусе. */
 .skip-link {
   position: fixed;
-  top: 12px;
-  left: 12px;
+  top: var(--sp-3);
+  left: var(--sp-3);
   z-index: 200;
   transform: translateY(-160%);
   padding: 10px 16px;
-  border-radius: var(--radius-pill);
-  background: var(--text);
-  color: var(--bg);
-  font-size: 13px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text);
+  font-size: var(--text-small-size);
   font-weight: 600;
   transition: transform var(--dur) var(--ease);
 }
@@ -156,7 +146,7 @@ b {
 }
 
 *::-webkit-scrollbar-thumb {
-  border-radius: var(--radius-pill);
+  border-radius: var(--r-sm);
   background: var(--border-strong);
 }
 

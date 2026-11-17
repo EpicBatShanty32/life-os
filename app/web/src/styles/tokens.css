@@ -1,124 +1,176 @@
 /* ─────────────────────────────────────────────────────────────
-   Life OS v3 — дизайн-токены
-   Палитра владельца: #F6F7FB · #FFFFFF · #17181C · #7A7D87
-   Акценты: #A18BB7 · #AEDEC2 · #F2C9B6 · #B9CBE8
-   Всё в CSS-переменных, тёмная тема — через [data-theme="dark"].
+   Life OS v4 — дизайн-токены «тихая студия».
+   Контракт: studio/DESIGN-v4.md §1.
+   Светлая тема — тёплая бумага, тёмная — тёплый графит.
+   Единственный файл, где допустимы hex-значения: всё остальное
+   в CSS и компонентах ссылается только на var(--…).
    ───────────────────────────────────────────────────────────── */
 
 :root {
   color-scheme: light;
 
-  /* Поверхности и текст */
-  --bg: #f6f7fb;
-  --surface: #ffffff;
-  --surface-soft: #fafbfd;
-  --surface-muted: #f0f1f6;
-  --surface-sunken: #eceef4;
-  --text: #17181c;
-  --text-secondary: #7a7d87;
-  --text-tertiary: #a9acb6;
+  /* ── Поверхности и текст ────────────────────────────────── */
+  --bg: #f5f4f1; /* фон приложения */
+  --surface: #ffffff; /* карточка, поле */
+  --surface-soft: #fbfaf8; /* зона внутри карточки */
+  --surface-muted: #efede7; /* чипы, инертные кнопки */
+  --surface-sunken: #e8e5dd; /* нажатие/углубление, доп. к muted */
+  --text: #1b1a17;
+  --text-secondary: #6e6a63;
+  --text-tertiary: #a39e95;
   --text-inverse: #ffffff;
-  --border: rgba(23, 24, 28, 0.07);
-  --border-strong: rgba(23, 24, 28, 0.13);
-  --overlay: rgba(23, 24, 28, 0.34);
+  --border: rgba(27, 26, 23, 0.09);
+  --border-strong: rgba(27, 26, 23, 0.18);
+  --overlay: rgba(27, 26, 23, 0.32);
 
-  /* Акценты */
-  --accent-violet: #a18bb7;
-  --accent-green: #aedec2;
-  --accent-peach: #f2c9b6;
-  --accent-blue: #b9cbe8;
-  --accent-violet-soft: rgba(161, 139, 183, 0.16);
-  --accent-green-soft: rgba(174, 222, 194, 0.24);
-  --accent-peach-soft: rgba(242, 201, 182, 0.24);
-  --accent-blue-soft: rgba(185, 203, 232, 0.24);
-  --accent-violet-strong: #8a73a2;
-  --on-accent: #17181c;
+  /* ── Один акцент: лаванда ───────────────────────────────── */
+  --accent: #7c639b;
+  --accent-strong: #684f86;
+  --accent-soft: rgba(124, 99, 155, 0.1);
+  --on-accent: #ffffff;
 
-  /* Служебные состояния */
-  --success: #5c9d77;
-  --success-soft: rgba(174, 222, 194, 0.3);
-  --warning: #c58a4d;
-  --warning-soft: rgba(242, 201, 182, 0.35);
-  --danger: #bd6d68;
-  --danger-soft: rgba(189, 109, 104, 0.14);
+  /* ── Категориальные маркеры ─────────────────────────────── */
+  --cat-1: #8e76a8; /* лаванда */
+  --cat-2: #7fa890; /* шалфей */
+  --cat-3: #c98f74; /* терракота */
+  --cat-4: #7e98bc; /* пыльная сталь */
+  --cat-5: #b08e5e; /* охра */
+  --cat-1-soft: rgba(142, 118, 168, 0.12);
+  --cat-2-soft: rgba(127, 168, 144, 0.12);
+  --cat-3-soft: rgba(201, 143, 116, 0.12);
+  --cat-4-soft: rgba(126, 152, 188, 0.12);
+  --cat-5-soft: rgba(176, 142, 94, 0.12);
 
-  /* Геометрия */
-  --radius-xl: 20px;
-  --radius-lg: 18px;
-  --radius-md: 14px;
-  --radius-sm: 10px;
-  --radius-pill: 999px;
-  --sidebar-w: 260px;
-  --sidebar-w-collapsed: 68px;
-  --topbar-h: 64px;
-  --content-pad: 32px;
-  --gap: 16px;
+  /* ── Служебные состояния ────────────────────────────────── */
+  --success: #4f7f62;
+  --success-soft: rgba(79, 127, 98, 0.12);
+  --warning: #a9762f;
+  --warning-soft: rgba(169, 118, 47, 0.12);
+  --danger: #a8544e;
+  --danger-soft: rgba(168, 84, 78, 0.12);
+  --selection: rgba(124, 99, 155, 0.26);
 
-  /* Тени — мягкие, без «грязи» */
-  --shadow-xs: 0 1px 2px rgba(23, 24, 28, 0.05);
-  --shadow-card:
-    0 1px 2px rgba(23, 24, 28, 0.04), 0 18px 40px -30px rgba(23, 24, 28, 0.32);
-  --shadow-card-hover:
-    0 2px 4px rgba(23, 24, 28, 0.05), 0 26px 50px -28px rgba(23, 24, 28, 0.32);
+  /* ── Геометрия: 6 / 8 / 10 / 14 / 18 ────────────────────── */
+  --r-xs: 6px;
+  --r-sm: 8px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 18px;
+
+  /* ── Сетка 4/8 ──────────────────────────────────────────── */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-7: 48px;
+  --sp-8: 64px;
+
+  /* Ритм страницы: 24 между блоками, 32 по краям. */
+  --block-gap: var(--sp-5);
+  --gap: var(--sp-4);
+  --bento-gap: var(--sp-4);
+  --content-pad: var(--sp-6);
+
+  /* ── Каркас ─────────────────────────────────────────────── */
+  --sidebar-w: 248px;
+  --sidebar-w-collapsed: 64px;
+  --topbar-h: 56px;
+
+  /* ── Тени: только всплывающий слой ──────────────────────── */
+  --shadow-card: none;
+  --shadow-card-hover: none;
+  --shadow-sidebar: none;
+  --shadow-xs: 0 1px 2px rgba(27, 26, 23, 0.04);
   --shadow-pop:
-    0 2px 8px rgba(23, 24, 28, 0.08), 0 32px 80px -28px rgba(23, 24, 28, 0.4);
-  --shadow-sidebar: 1px 0 0 var(--border);
+    0 12px 32px -12px rgba(27, 26, 23, 0.28),
+    0 2px 8px rgba(27, 26, 23, 0.06);
 
-  /* Типографика */
+  /* ── Типографика ────────────────────────────────────────── */
   --font-sans:
     -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
     'Noto Sans', sans-serif;
   --font-num:
     'SF Mono', ui-monospace, 'Cascadia Mono', 'Roboto Mono', Menlo, Consolas, monospace;
 
-  /* Движение */
+  --text-screen-size: 26px;
+  --text-screen-line: 32px;
+  --text-block-size: 15px;
+  --text-block-line: 20px;
+  --text-body-size: 14px;
+  --text-body-line: 21px;
+  --text-small-size: 13px;
+  --text-small-line: 18px;
+  --text-caption-size: 12px;
+  --text-caption-line: 16px;
+  --text-tiny-size: 11px;
+  --text-tiny-line: 14px;
+  --tracking-screen: -0.02em;
+
+  /* ── Движение: 140–180 мс, opacity/transform ────────────── */
   --ease: cubic-bezier(0.22, 0.68, 0.28, 1);
-  --dur-fast: 120ms;
-  --dur: 180ms;
-  --dur-slow: 280ms;
+  --dur-fast: 140ms;
+  --dur: 160ms;
+  --dur-slow: 180ms;
 
-  /* Доступность */
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px rgba(161, 139, 183, 0.6);
+  /* ── Доступность ────────────────────────────────────────── */
+  --focus-ring:
+    0 0 0 2px var(--bg),
+    0 0 0 4px rgba(124, 99, 155, 0.55);
 
-  /* Сетка bento */
-  --bento-gap: 16px;
+  /* ─────────────────────────────────────────────────────────
+     Совместимость с v3-страницами: старые имена живут как
+     алиасы, чтобы разметка не ломалась. Новый код — только
+     на --accent / --cat-* / --r-* / --sp-*.
+     ───────────────────────────────────────────────────────── */
+  --accent-violet: var(--accent);
+  --accent-violet-strong: var(--accent-strong);
+  --accent-violet-soft: var(--accent-soft);
+  --accent-green: var(--cat-2);
+  --accent-green-soft: var(--cat-2-soft);
+  --accent-peach: var(--cat-3);
+  --accent-peach-soft: var(--cat-3-soft);
+  --accent-blue: var(--cat-4);
+  --accent-blue-soft: var(--cat-4-soft);
+
+  --radius-pill: var(--r-xs); /* капсулы v3 больше не нужны */
+  --radius-xl: var(--r-lg); /* старые карточки — 14, не 20 */
+  --radius-lg: var(--r-lg);
+  --radius-md: var(--r-md);
+  --radius-sm: var(--r-sm);
 }
 
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --bg: #101116;
-  --surface: #171920;
-  --surface-soft: #1b1e26;
-  --surface-muted: #22252e;
-  --surface-sunken: #262a34;
-  --text: #f3f4f8;
-  --text-secondary: #a5a9b6;
-  --text-tertiary: #7c8291;
-  --text-inverse: #17181c;
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.15);
-  --overlay: rgba(5, 6, 9, 0.62);
+  --bg: #121211;
+  --surface: #1a1a18;
+  --surface-soft: #20201e;
+  --surface-muted: #262624;
+  --surface-sunken: #2b2b28;
+  --text: #edebe5;
+  --text-secondary: #a7a29a;
+  --text-tertiary: #7a766f;
+  --text-inverse: #121211;
+  --border: rgba(255, 255, 255, 0.09);
+  --border-strong: rgba(255, 255, 255, 0.17);
+  --overlay: rgba(0, 0, 0, 0.6);
 
-  --accent-violet-soft: rgba(161, 139, 183, 0.24);
-  --accent-green-soft: rgba(174, 222, 194, 0.18);
-  --accent-peach-soft: rgba(242, 201, 182, 0.18);
-  --accent-blue-soft: rgba(185, 203, 232, 0.18);
-  --accent-violet-strong: #b7a5ca;
-  --on-accent: #17181c;
+  --accent: #b49cd0;
+  --accent-strong: #c9b6e0;
+  --accent-soft: rgba(180, 156, 208, 0.14);
+  --on-accent: #17161a;
+  --selection: rgba(180, 156, 208, 0.3);
 
-  --success: #8fc8a6;
-  --success-soft: rgba(174, 222, 194, 0.16);
-  --warning: #e0b083;
-  --warning-soft: rgba(242, 201, 182, 0.16);
-  --danger: #e0938d;
-  --danger-soft: rgba(224, 147, 141, 0.16);
+  --success: #9cc9ac;
+  --success-soft: rgba(156, 201, 172, 0.12);
+  --warning: #ddb47c;
+  --warning-soft: rgba(221, 180, 124, 0.12);
+  --danger: #dfa09b;
+  --danger-soft: rgba(223, 160, 155, 0.12);
 
-  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 18px 40px -30px rgba(0, 0, 0, 0.7);
-  --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.35), 0 26px 50px -28px rgba(0, 0, 0, 0.75);
-  --shadow-pop: 0 2px 8px rgba(0, 0, 0, 0.4), 0 32px 80px -28px rgba(0, 0, 0, 0.85);
-  --shadow-sidebar: 1px 0 0 var(--border);
-
-  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px rgba(185, 203, 232, 0.7);
+  --focus-ring:
+    0 0 0 2px var(--bg),
+    0 0 0 4px rgba(180, 156, 208, 0.6);
 }
