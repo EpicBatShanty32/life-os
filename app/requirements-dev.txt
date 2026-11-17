@@ -1,0 +1,3 @@
+# Для тестов v3: pytest и ASGI-клиент.
+-r requirements.txt
+pytest>=8.0,<9.0

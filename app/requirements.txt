@@ -1,0 +1,9 @@
+# Life OS v3 (app/): сервер, бот, воркер.
+# Версии зафиксированы по рабочей среде (macOS, Python 3.9+).
+fastapi>=0.110,<1.0
+uvicorn>=0.29,<1.0
+pydantic>=2.6,<3.0
+aiogram>=3.4,<4.0
+httpx>=0.27,<1.0
+# Python 3.9: pydantic вычисляет аннотации `str | None`, ему нужен бэкпорт.
+eval_type_backport; python_version < "3.10"

@@ -1,0 +1,124 @@
+/* ─────────────────────────────────────────────────────────────
+   Life OS v3 — дизайн-токены
+   Палитра владельца: #F6F7FB · #FFFFFF · #17181C · #7A7D87
+   Акценты: #A18BB7 · #AEDEC2 · #F2C9B6 · #B9CBE8
+   Всё в CSS-переменных, тёмная тема — через [data-theme="dark"].
+   ───────────────────────────────────────────────────────────── */
+
+:root {
+  color-scheme: light;
+
+  /* Поверхности и текст */
+  --bg: #f6f7fb;
+  --surface: #ffffff;
+  --surface-soft: #fafbfd;
+  --surface-muted: #f0f1f6;
+  --surface-sunken: #eceef4;
+  --text: #17181c;
+  --text-secondary: #7a7d87;
+  --text-tertiary: #a9acb6;
+  --text-inverse: #ffffff;
+  --border: rgba(23, 24, 28, 0.07);
+  --border-strong: rgba(23, 24, 28, 0.13);
+  --overlay: rgba(23, 24, 28, 0.34);
+
+  /* Акценты */
+  --accent-violet: #a18bb7;
+  --accent-green: #aedec2;
+  --accent-peach: #f2c9b6;
+  --accent-blue: #b9cbe8;
+  --accent-violet-soft: rgba(161, 139, 183, 0.16);
+  --accent-green-soft: rgba(174, 222, 194, 0.24);
+  --accent-peach-soft: rgba(242, 201, 182, 0.24);
+  --accent-blue-soft: rgba(185, 203, 232, 0.24);
+  --accent-violet-strong: #8a73a2;
+  --on-accent: #17181c;
+
+  /* Служебные состояния */
+  --success: #5c9d77;
+  --success-soft: rgba(174, 222, 194, 0.3);
+  --warning: #c58a4d;
+  --warning-soft: rgba(242, 201, 182, 0.35);
+  --danger: #bd6d68;
+  --danger-soft: rgba(189, 109, 104, 0.14);
+
+  /* Геометрия */
+  --radius-xl: 20px;
+  --radius-lg: 18px;
+  --radius-md: 14px;
+  --radius-sm: 10px;
+  --radius-pill: 999px;
+  --sidebar-w: 260px;
+  --sidebar-w-collapsed: 68px;
+  --topbar-h: 64px;
+  --content-pad: 32px;
+  --gap: 16px;
+
+  /* Тени — мягкие, без «грязи» */
+  --shadow-xs: 0 1px 2px rgba(23, 24, 28, 0.05);
+  --shadow-card:
+    0 1px 2px rgba(23, 24, 28, 0.04), 0 18px 40px -30px rgba(23, 24, 28, 0.32);
+  --shadow-card-hover:
+    0 2px 4px rgba(23, 24, 28, 0.05), 0 26px 50px -28px rgba(23, 24, 28, 0.32);
+  --shadow-pop:
+    0 2px 8px rgba(23, 24, 28, 0.08), 0 32px 80px -28px rgba(23, 24, 28, 0.4);
+  --shadow-sidebar: 1px 0 0 var(--border);
+
+  /* Типографика */
+  --font-sans:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans', sans-serif;
+  --font-num:
+    'SF Mono', ui-monospace, 'Cascadia Mono', 'Roboto Mono', Menlo, Consolas, monospace;
+
+  /* Движение */
+  --ease: cubic-bezier(0.22, 0.68, 0.28, 1);
+  --dur-fast: 120ms;
+  --dur: 180ms;
+  --dur-slow: 280ms;
+
+  /* Доступность */
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px rgba(161, 139, 183, 0.6);
+
+  /* Сетка bento */
+  --bento-gap: 16px;
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg: #101116;
+  --surface: #171920;
+  --surface-soft: #1b1e26;
+  --surface-muted: #22252e;
+  --surface-sunken: #262a34;
+  --text: #f3f4f8;
+  --text-secondary: #a5a9b6;
+  --text-tertiary: #7c8291;
+  --text-inverse: #17181c;
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --overlay: rgba(5, 6, 9, 0.62);
+
+  --accent-violet-soft: rgba(161, 139, 183, 0.24);
+  --accent-green-soft: rgba(174, 222, 194, 0.18);
+  --accent-peach-soft: rgba(242, 201, 182, 0.18);
+  --accent-blue-soft: rgba(185, 203, 232, 0.18);
+  --accent-violet-strong: #b7a5ca;
+  --on-accent: #17181c;
+
+  --success: #8fc8a6;
+  --success-soft: rgba(174, 222, 194, 0.16);
+  --warning: #e0b083;
+  --warning-soft: rgba(242, 201, 182, 0.16);
+  --danger: #e0938d;
+  --danger-soft: rgba(224, 147, 141, 0.16);
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 18px 40px -30px rgba(0, 0, 0, 0.7);
+  --shadow-card-hover: 0 2px 4px rgba(0, 0, 0, 0.35), 0 26px 50px -28px rgba(0, 0, 0, 0.75);
+  --shadow-pop: 0 2px 8px rgba(0, 0, 0, 0.4), 0 32px 80px -28px rgba(0, 0, 0, 0.85);
+  --shadow-sidebar: 1px 0 0 var(--border);
+
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px rgba(185, 203, 232, 0.7);
+}

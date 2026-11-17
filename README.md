@@ -486,6 +486,17 @@ python3 src/main.py --dry-run --once
 
 ---
 
+## Life OS v3 (`app/`) — новое ядро
+
+Рядом со старым контуром живёт переписанное приложение: FastAPI-сервер,
+React-SPA и Telegram-бот на aiogram. Оно не мешает установленной версии и
+запускается отдельно.
+
+- Подробности запуска — [`app/README.md`](app/README.md).
+- Демо-данные: `python3 -m app.server.seeder --db data/lifeos-v3.db --days 120`.
+- Сервер: `python3 -m uvicorn app.server.main:app --port 8787`, SPA — на `/`.
+- Тесты ядра: `python3 -m pytest app/tests -q` (225 штук).
+
 ## Где что лежит
 
 | Что | Где |

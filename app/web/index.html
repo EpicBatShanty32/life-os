@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta
+      name="description"
+      content="Life OS — личный дашборд: день, тело, знания и аналитика в одном контуре."
+    />
+    <meta name="theme-color" content="#F6F7FB" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#101116" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="apple-touch-icon" sizes="180x180" href="./apple-touch-icon-180.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Life OS" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23A18BB7'/%3E%3Cpath d='M10 22V12M16 22V8M22 22v-6' stroke='%23fff' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E"
+    />
+    <title>Life OS — личный дашборд</title>
+    <script>
+      // Тема применяется до первой отрисовки, чтобы не было вспышки светлого экрана.
+      (function () {
+        try {
+          var mode = localStorage.getItem('lifeos.theme') || 'auto';
+          var dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          document.documentElement.dataset.theme =
+            mode === 'dark' || (mode === 'auto' && dark) ? 'dark' : 'light';
+        } catch (error) {
+          document.documentElement.dataset.theme = 'light';
+        }
+      })();
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>Для работы Life OS нужен включённый JavaScript.</noscript>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
