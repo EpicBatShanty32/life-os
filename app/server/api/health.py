@@ -16,10 +16,15 @@ from fastapi import APIRouter, Query
 from pydantic import BaseModel, Field
 
 from app import __version__
-from app.server.api.aggregates import ema_series
+from app.server.api.aggregates import (
+    DELTA_WINDOWS,
+    composition_deltas,
+    ema_series,
+    weight_forecast,
+)
 from app.server.api.deps import ConnectionDep, SettingsDep
 
-__all__ = ["WeightPoint", "WeightSeries", "router"]
+__all__ = ["CompositionItem", "CompositionResponse", "WeightPoint", "WeightSeries", "router"]
 
 router = APIRouter(prefix="/api", tags=["health"])
 
@@ -33,7 +38,7 @@ class WeightPoint(BaseModel):
 
 
 class WeightSeries(BaseModel):
-    """Ряд веса за ``days`` дней и EMA с окном ``window``."""
+    """Ряд веса за ``days`` дней, EMA и прогноз даты цели."""
 
     days: int
     window: int
@@ -42,6 +47,8 @@ class WeightSeries(BaseModel):
     ema: float | None = None
     delta: float | None = None
     target_kg: float | None = None
+    rate_per_week: float | None = None
+    forecast: dict[str, Any] | None = None
     points: list[WeightPoint] = Field(default_factory=list)
 
 
@@ -120,6 +127,13 @@ def weight_series(
         WeightPoint(date=day, value=round(value, 2), ema=round(ema, 2))
         for day, value, ema in zip(dates, averages, smoothed)
     ]
+    target_kg = None if target is None else _active_weight_goal(conn)
+    forecast = weight_forecast(
+        [(day, value) for day, value in zip(dates, averages)],
+        target_kg,
+        today,
+        window_days=min(days, 30),
+    )
     return WeightSeries(
         days=days,
         window=window,
@@ -127,9 +141,36 @@ def weight_series(
         current=round(averages[-1], 2),
         ema=round(smoothed[-1], 2),
         delta=round(averages[-1] - averages[0], 2),
-        target_kg=None if target is None else _active_weight_goal(conn),
+        target_kg=target_kg,
+        rate_per_week=forecast.get("rate_per_week"),
+        forecast=forecast,
         points=points,
     )
+
+
+class CompositionItem(BaseModel):
+    """Состав тела: текущее значение и дельты за 7/30/90 дней."""
+
+    key: str
+    label: str
+    unit: str = ""
+    current: float | None = None
+    deltas: dict[str, float | None] = Field(default_factory=dict)
+    counts: dict[str, int] = Field(default_factory=dict)
+
+
+class CompositionResponse(BaseModel):
+    """Ответ ``/api/health/composition``."""
+
+    windows: list[int] = Field(default_factory=list)
+    items: list[CompositionItem] = Field(default_factory=list)
+
+
+@router.get("/health/composition")
+def composition(conn: ConnectionDep, settings: SettingsDep) -> CompositionResponse:
+    """Дельты жира/мышц/воды за 7/30/90 дней; пустые — ``None``, не ноль."""
+    items = composition_deltas(conn, settings.now().date())
+    return CompositionResponse(windows=list(DELTA_WINDOWS), items=items)
 
 
 def _active_weight_goal(conn) -> float | None:

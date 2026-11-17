@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Icon } from '../components/Icon';
 import { ThemeSwitch } from '../components/ThemeSwitch';
+import { writeOwnerToken } from '../api/client';
+import { readRaw, STORAGE_KEYS } from '../lib/storage';
 import { THEME_LABELS, useTheme } from '../lib/theme';
 
 interface SettingsPayload {
@@ -14,6 +16,12 @@ interface SettingsPayload {
 }
 
 const API_BASE = (import.meta.env.VITE_API_BASE ?? '/api').replace(/\/+$/, '');
+
+/** Заголовок токена для «сырых» fetch: cookie выставляется при сохранении. */
+function authHeaders(): Record<string, string> {
+  const token = readRaw(STORAGE_KEYS.token);
+  return token ? { 'X-LifeOS-Token': token } : {};
+}
 
 function text(value: unknown, fallback = '—'): string {
   if (value === null || value === undefined || value === '') return fallback;
@@ -35,9 +43,11 @@ export function Settings() {
   const [data, setData] = useState<SettingsPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [health, setHealth] = useState<string>('проверяю');
+  const [token, setToken] = useState<string>(() => readRaw(STORAGE_KEYS.token) ?? '');
+  const [tokenState, setTokenState] = useState<'idle' | 'saved' | 'rejected'>('idle');
 
   useEffect(() => {
-    fetch(`${API_BASE}/settings`, { credentials: 'same-origin' })
+    fetch(`${API_BASE}/settings`, { credentials: 'same-origin', headers: authHeaders() })
       .then((response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         return response.json() as Promise<SettingsPayload>;
@@ -45,7 +55,7 @@ export function Settings() {
       .then(setData)
       .catch((problem: unknown) => setError(problem instanceof Error ? problem.message : 'нет ответа'));
 
-    fetch(`${API_BASE}/health`, { credentials: 'same-origin' })
+    fetch(`${API_BASE}/health`, { credentials: 'same-origin', headers: authHeaders() })
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
       .then((payload: { status?: string }) => setHealth(payload.status ?? 'ok'))
       .catch(() => setHealth('нет связи'));
@@ -55,7 +65,10 @@ export function Settings() {
     void (async () => {
       const parts = await Promise.all(
         ['today', 'journal', 'habits', 'goals'].map((name) =>
-          fetch(`${API_BASE}/sections/${name}?days=120`, { credentials: 'same-origin' })
+          fetch(`${API_BASE}/sections/${name}?days=120`, {
+            credentials: 'same-origin',
+            headers: authHeaders(),
+          })
             .then((response) => (response.ok ? response.json() : null))
             .catch(() => null),
         ),
@@ -69,6 +82,24 @@ export function Settings() {
       link.click();
       URL.revokeObjectURL(url);
     })();
+  }
+
+  function saveToken(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    writeOwnerToken(token);
+    // Проверяем токен защищённым запросом: health публичный и ничего не докажет.
+    void fetch(`${API_BASE}/settings`, {
+      credentials: 'same-origin',
+      headers: { 'X-LifeOS-Token': token.trim() },
+    })
+      .then((response) => setTokenState(response.ok ? 'saved' : 'rejected'))
+      .catch(() => setTokenState('rejected'));
+  }
+
+  function forgetToken() {
+    setToken('');
+    writeOwnerToken(null);
+    setTokenState('idle');
   }
 
   const telegram = (data?.telegram ?? {}) as Record<string, unknown>;
@@ -118,6 +149,56 @@ export function Settings() {
         <Row label="Каталог данных" value={text(data?.app?.data_dir)} />
         <Row label="База" value={text(data?.paths?.db)} />
         <Row label="Медиа" value={text(data?.paths?.media)} />
+      </section>
+
+      <section className="card" aria-labelledby="token-title">
+        <header className="card__head">
+          <div>
+            <h2 className="card__title" id="token-title">
+              Доступ
+            </h2>
+            <p className="card__sub">
+              Если сервер запущен с токеном владельца, вставьте его здесь — он сохранится в
+              cookie и не будет показан снова.
+            </p>
+          </div>
+        </header>
+        <form className="setting-actions" onSubmit={saveToken}>
+          <label className="setting-row__label" htmlFor="owner-token">
+            Токен владельца
+          </label>
+          <input
+            id="owner-token"
+            className="input"
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            placeholder="X-LifeOS-Token"
+            value={token}
+            onChange={(event) => {
+              setToken(event.target.value);
+              setTokenState('idle');
+            }}
+          />
+          <button className="btn" type="submit">
+            <Icon name="check" size={16} />
+            <span>Сохранить</span>
+          </button>
+          <button className="btn btn--ghost" type="button" onClick={forgetToken}>
+            <Icon name="close" size={16} />
+            <span>Забыть</span>
+          </button>
+        </form>
+        {tokenState === 'saved' ? (
+          <p className="card__sub" role="status">
+            Токен принят сервером и сохранён в этом браузере.
+          </p>
+        ) : null}
+        {tokenState === 'rejected' ? (
+          <p className="card__sub" role="status">
+            Сервер отклонил токен (401). Проверьте значение и повторите.
+          </p>
+        ) : null}
       </section>
 
       <section className="card" aria-labelledby="vault-title">

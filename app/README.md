@@ -10,7 +10,7 @@ app/
   web/        SPA: React 19 + TypeScript + Vite, без внешних UI-библиотек
   bot/        Telegram-бот (aiogram): приём текста и медиа
   worker/     Очередь задач: транскрибация, сегменты, конспекты
-  tests/      pytest: 240 тестов на момент 0.3.0-alpha
+  tests/      pytest: 272 теста на момент 3.0.0-alpha
   qa_report/  скриншоты и отчёт приёмки
 ```
 
@@ -73,11 +73,35 @@ python3 -m app.worker.main
 | `POST /api/habits/{id}/mark`, `POST /api/habits`, `POST /api/goals`, `PATCH /api/goals/{id}` | привычки и цели |
 | `GET /media/{lesson_id}` | медиа с Range (`bytes=0-999` → 206) |
 | `WS /ws` | события изменений |
+| `GET /api/health/weight?days=90&window=7` | ряд веса, EMA, скорость кг/нед и прогноз даты цели |
+| `GET /api/health/composition` | жир/мышцы/вода: текущее и дельты за 7/30/90 дней |
+| `GET /api/analytics/correlations?days=90` | корреляции сон↔настроение, вода↔настроение, тренировки↔вес |
+
+### Контракты аналитики (v3)
+
+`/api/health/weight` добавляет к ряду и EMA:
+
+```json
+{"current": 79.8, "ema": 79.9, "delta": -1.6, "target_kg": 78.0, "rate_per_week": -0.35,
+ "forecast": {"status": "ok", "date": "2027-01-15", "weeks": 9.5, "rate_per_week": -0.35,
+              "target_kg": 78.0, "current": 79.8}}
+```
+
+`forecast.status`: `ok` (есть дата), `reached` (цель достигнута), `flat` (тренда
+нет), `insufficient_data` (< 5 замеров за 30 дней), `no_target` (цель по весу
+не задана), `away_from_target` (движение идёт от цели). В не-`ok` статусах
+`date` и `weeks` — `null`, UI не показывает выдуманную дату.
+
+`/api/health/composition` отдаёт `items[]` с `deltas {"7","30","90"}` и
+`counts`; если замеров в окне меньше двух, дельта `null` («мало данных»).
+
+Корреляции считаются только при `n ≥ 14` и `|r| ≥ 0.3`, иначе возвращается
+статус `insufficient_data` / `no_variance` / `weak` и понятный текст.
 
 ## Тесты
 
 ```bash
-python3 -m pytest app/tests -q          # 225 тестов
+python3 -m pytest app/tests -q          # 272 теста
 /usr/bin/python3 -m py_compile app/server/api/*.py   # синтаксис 3.9
 cd app/web && npm run build             # tsc + vite
 ```

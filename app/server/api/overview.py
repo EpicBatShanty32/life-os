@@ -369,7 +369,8 @@ def _activity(conn, today: date) -> list[ActivityDay]:
 
 
 def _insight(conn, today: date) -> Insight | None:
-    for item in build_correlations(conn, today, days=90):
+    pairs = build_correlations(conn, today, days=90)
+    for item in pairs:
         if item["status"] != "ok":
             continue
         return Insight(
@@ -377,7 +378,24 @@ def _insight(conn, today: date) -> Insight | None:
             text=str(item["sentence"]),
             footnote="Корреляция r = %.2f · n = %d" % (item["r"], item["n"]),
         )
-    return None
+    # Данные есть, но связь слабее порога: это не «мало данных», и молчать об
+    # этом нельзя — показываем самую заметную пару и честный коэффициент.
+    weak = [
+        item
+        for item in pairs
+        if item["status"] == "weak" and isinstance(item.get("r"), (int, float))
+    ]
+    if not weak:
+        return None
+    best = max(weak, key=lambda item: abs(float(item["r"])))
+    return Insight(
+        title="%s ↔ %s" % (best["left_label"], best["right_label"]),
+        text=(
+            "%s. Пока связь слабее порога — вывод появится, когда |r| станет ≥ 0,3."
+            % (best["sentence"] or "Связь между показателями пока неустойчива")
+        ),
+        footnote="r = %.2f · n = %d · порог |r| ≥ 0,3" % (best["r"], best["n"]),
+    )
 
 
 def _sync_status(conn, settings) -> SyncStatus:

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toLocalIso, weekdayShort } from '../lib/format';
-import { readJson, readNumber, readRaw, STORAGE_KEYS, writeJson, writeRaw } from '../lib/storage';
+import { readJson, readNumber, readRaw, removeRaw, STORAGE_KEYS, writeJson, writeRaw } from '../lib/storage';
 import { createMockOverview } from './mock';
 import type {
   ActivityDay,
@@ -48,6 +48,28 @@ function nonNegativeInt(value: unknown, fallback: number): number {
 
 function readToken(): string | null {
   return readRaw(STORAGE_KEYS.token);
+}
+
+/** Токен владельца дублируем в cookie: так его видят и «сырые» fetch без заголовка. */
+export function writeOwnerToken(token: string | null): void {
+  const value = (token ?? '').trim();
+  if (value) {
+    writeRaw(STORAGE_KEYS.token, value);
+    document.cookie = `lifeos_token=${encodeURIComponent(value)}; path=/; SameSite=Strict`;
+  } else {
+    removeRaw(STORAGE_KEYS.token);
+    document.cookie = 'lifeos_token=; path=/; Max-Age=0; SameSite=Strict';
+  }
+}
+
+// При старте приложения cookie могла пропасть (очистка браузера) — восстановим.
+const storedToken = readToken();
+if (storedToken) {
+  try {
+    document.cookie = `lifeos_token=${encodeURIComponent(storedToken)}; path=/; SameSite=Strict`;
+  } catch {
+    /* cookie недоступны — остаётся заголовок X-LifeOS-Token */
+  }
 }
 
 async function request<T>(path: string, init?: RequestInit, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {

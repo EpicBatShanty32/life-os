@@ -71,6 +71,8 @@ export function Courses() {
   const [detail, setDetail] = useState<LessonDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  /** Фильтр по субтитрам текущего урока: сбрасывается при открытии другого урока. */
+  const [segmentQuery, setSegmentQuery] = useState('');
   const mediaRef = useRef<HTMLMediaElement | null>(null);
   const saveTimer = useRef<number | null>(null);
 
@@ -95,6 +97,7 @@ export function Courses() {
   }, []);
 
   const openLesson = useCallback((lessonId: number) => {
+    setSegmentQuery('');
     getJson<LessonDetail>(`/lessons/${lessonId}`)
       .then((payload) => {
         setDetail(payload);
@@ -145,6 +148,16 @@ export function Courses() {
 
   if (detail) {
     const mediaPath = `${API_BASE.replace(/\/api$/, '')}/media/${detail.lesson.id}`;
+    // Поиск по субтитрам: текст сегмента в нижнем регистре + таймкод вида 1:05.
+    const normalizedQuery = segmentQuery.trim().toLowerCase();
+    const visibleSegments =
+      normalizedQuery === ''
+        ? detail.segments
+        : detail.segments.filter(
+            (segment) =>
+              segment.text.toLowerCase().includes(normalizedQuery) ||
+              clock(segment.start_s).includes(normalizedQuery),
+          );
     return (
       <div className="page">
         <header className="page-head">
@@ -159,7 +172,14 @@ export function Courses() {
             </p>
           </div>
           <div className="page-head__actions">
-            <button className="btn btn--ghost" type="button" onClick={() => setDetail(null)}>
+            <button
+              className="btn btn--ghost"
+              type="button"
+              onClick={() => {
+                setSegmentQuery('');
+                setDetail(null);
+              }}
+            >
               <Icon name="chevron-left" size={16} />
               <span>К списку уроков</span>
             </button>
@@ -198,16 +218,58 @@ export function Courses() {
           )}
 
           {detail.segments.length > 0 ? (
-            <ol className="chips" aria-label="Таймкоды">
-              {detail.segments.map((segment) => (
-                <li key={segment.id}>
-                  <button className="chip" type="button" onClick={() => jump(segment.start_s)}>
-                    <span className="chip__time">{clock(segment.start_s)}</span>
-                    <span className="chip__text">{segment.text}</span>
-                  </button>
-                </li>
-              ))}
-            </ol>
+            <div className="segment-search">
+              <div className="page-head">
+                <div>
+                  <h2 className="card__title">
+                    <label htmlFor="lesson-segment-search">Поиск по субтитрам</label>
+                  </h2>
+                  <p className="card__sub" id="lesson-segment-count" role="status">
+                    Найдено {visibleSegments.length} из {detail.segments.length}
+                  </p>
+                </div>
+                <div className="page-head__actions">
+                  <input
+                    id="lesson-segment-search"
+                    className="input search"
+                    type="text"
+                    value={segmentQuery}
+                    onChange={(event) => setSegmentQuery(event.target.value)}
+                    placeholder="Например: дыхание"
+                    aria-describedby="lesson-segment-count"
+                    autoComplete="off"
+                  />
+                  {segmentQuery !== '' ? (
+                    <button
+                      className="btn btn--ghost"
+                      type="button"
+                      onClick={() => setSegmentQuery('')}
+                    >
+                      <Icon name="close" size={16} />
+                      <span>Сбросить</span>
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+
+              {visibleSegments.length > 0 ? (
+                <ol className="chips" aria-label="Таймкоды">
+                  {visibleSegments.map((segment) => (
+                    <li key={segment.id}>
+                      <button className="chip" type="button" onClick={() => jump(segment.start_s)}>
+                        <span className="chip__time">{clock(segment.start_s)}</span>
+                        <span className="chip__text">{segment.text}</span>
+                      </button>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="empty-note">
+                  Ничего не найдено по запросу «{segmentQuery.trim()}». Попробуйте другое слово или
+                  таймкод вида 1:05.
+                </p>
+              )}
+            </div>
           ) : null}
 
           <div className="player-nav">

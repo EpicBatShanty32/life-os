@@ -24,14 +24,19 @@ from app.server.db import get_setting, set_setting
 from app.server.settings import Settings
 
 __all__ = [
+    "COMPOSITION_KINDS",
     "DEFAULT_PREFERENCES",
+    "DELTA_WINDOWS",
     "MIN_CORRELATION_DAYS",
     "MIN_CORRELATION_R",
     "TRAINING_KINDS",
     "WATER_KINDS",
     "WEEKDAYS",
     "build_correlations",
+    "composition_deltas",
     "ema_series",
+    "linear_trend",
+    "weight_forecast",
     "entry_daily_counts",
     "entry_daily_minutes",
     "latest_metric",
@@ -225,6 +230,144 @@ def ema_series(values: Sequence[float], window: int = 7) -> list[float]:
     return result
 
 
+#: Показатели состава тела для дельт за 7/30/90 дней (MASTER_SPEC §2.5).
+COMPOSITION_KINDS: tuple[tuple[str, str], ...] = (
+    ("fat", "Жир"),
+    ("muscle", "Мышцы"),
+    ("body_water", "Вода в теле"),
+)
+
+#: Окна дельт состава тела, дней.
+DELTA_WINDOWS: tuple[int, ...] = (7, 30, 90)
+
+
+def linear_trend(points: Sequence[tuple[str, float]]) -> tuple[float, float] | None:
+    """Прямая по МНК через точки ``(дата, значение)``.
+
+    Возвращает ``(наклон_за_день, свободный_член)`` или ``None``, если точек
+    меньше трёх или все даты совпадают. Наклон отрицательный — показатель
+    падает (вес снижается), положительный — растёт.
+    """
+    if len(points) < 3:
+        return None
+    xs = [date.fromisoformat(str(day)).toordinal() for day, _ in points]
+    ys = [float(value) for _, value in points]
+    count = len(xs)
+    mean_x = sum(xs) / count
+    mean_y = sum(ys) / count
+    denominator = sum((x - mean_x) ** 2 for x in xs)
+    if denominator <= 0:
+        return None
+    numerator = sum((x - mean_x) * (y - mean_y) for x, y in zip(xs, ys))
+    slope = numerator / denominator
+    return slope, mean_y - slope * mean_x
+
+
+def weight_forecast(
+    points: Sequence[tuple[str, float]],
+    target_kg: float | None,
+    today: date,
+    *,
+    window_days: int = 30,
+    min_points: int = 5,
+) -> dict[str, Any]:
+    """Прогноз даты цели по тренду последних ``window_days`` дней.
+
+    ``points`` — дневные средние веса ``(YYYY-MM-DD, кг)``. Никаких выдуманных
+    дат: если тренда нет (``flat``), данных мало (``insufficient_data``) или
+    движение идёт от цели (``away_from_target``), ``date`` остаётся ``None`` —
+    UI покажет честный статус.
+    """
+    horizon = today.toordinal() - max(1, int(window_days))
+    recent = [
+        (str(day), float(value))
+        for day, value in points
+        if date.fromisoformat(str(day)).toordinal() >= horizon
+    ][-60:]
+    result: dict[str, Any] = {
+        "status": "insufficient_data",
+        "target_kg": None if target_kg is None else round(float(target_kg), 2),
+        "rate_per_week": None,
+        "date": None,
+        "weeks": None,
+        "current": round(recent[-1][1], 2) if recent else None,
+    }
+    if len(recent) < min_points:
+        return result
+
+    trend = linear_trend(recent)
+    if trend is None:
+        return result
+
+    slope, _ = trend
+    rate = round(slope * 7.0, 2)
+    result["rate_per_week"] = rate
+    if abs(rate) < 0.05:
+        result["status"] = "flat"
+        return result
+    if target_kg is None:
+        result["status"] = "no_target"
+        return result
+
+    current = recent[-1][1]
+    remaining = float(target_kg) - current
+    if abs(remaining) < 0.05:
+        result.update(status="reached", date=today.isoformat(), weeks=0.0)
+        return result
+    if remaining * slope <= 0:
+        result["status"] = "away_from_target"
+        return result
+
+    days_needed = remaining / slope
+    due = today + timedelta(days=int(round(days_needed)))
+    result.update(status="ok", date=due.isoformat(), weeks=round(days_needed / 7.0, 1))
+    return result
+
+
+def composition_deltas(
+    conn,
+    today: date,
+    *,
+    windows: Sequence[int] = DELTA_WINDOWS,
+) -> list[dict[str, Any]]:
+    """Дельты жира/мышц/воды за 7/30/90 дней по дневным средним.
+
+    Для каждого окна берётся первое и последнее измерение внутри него; если
+    точек меньше двух, дельта ``None`` — интерфейс пишет «мало данных», а не
+    рисует ноль.
+    """
+    windows = tuple(int(window) for window in windows if int(window) >= 2)
+    if not windows:
+        return []
+    lookback = max(90, max(windows))
+    since = (today - timedelta(days=lookback - 1)).isoformat()
+    items: list[dict[str, Any]] = []
+    for kind, label in COMPOSITION_KINDS:
+        daily = metric_daily_avg(conn, kind, since=since)
+        days = sorted(daily)
+        current = round(daily[days[-1]], 2) if days else None
+        deltas: dict[str, float | None] = {}
+        counts: dict[str, int] = {}
+        for window in windows:
+            start = today - timedelta(days=window - 1)
+            subset = [daily[day] for day in days if date.fromisoformat(day) >= start]
+            counts[str(window)] = len(subset)
+            deltas[str(window)] = (
+                round(subset[-1] - subset[0], 2) if len(subset) >= 2 else None
+            )
+        items.append(
+            {
+                "key": kind,
+                "label": label,
+                "unit": metric_unit(conn, kind),
+                "current": current,
+                "deltas": deltas,
+                "counts": counts,
+            }
+        )
+    return items
+
+
 def pearson(pairs: Sequence[tuple[float, float]]) -> float | None:
     """Коэффициент Пирсона; ``None``, если точек мало или нет разброса."""
     points = [(float(left), float(right)) for left, right in pairs]
@@ -262,6 +405,13 @@ def build_correlations(conn, today: date, days: int = 90) -> list[dict[str, Any]
     for left, right, left_label, right_label, sentence in _CORRELATION_PAIRS:
         left_series = series[left]
         right_series = series[right]
+        if left == "training":
+            # Отсутствие тренировки — это ноль, а не «нет данных»: иначе
+            # двоичный ряд всегда постоянный и корреляция физически невозможна.
+            trainings = set(left_series)
+            left_series = {
+                day: 1.0 if day in trainings else 0.0 for day in right_series
+            }
         common = sorted(set(left_series) & set(right_series))
         pairs = [(left_series[day], right_series[day]) for day in common]
         count = len(pairs)
