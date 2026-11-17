@@ -1,8 +1,9 @@
-"""Демо-данные Life OS v3: 120 дней правдоподобной жизни и два курса.
+"""Демо-данные Life OS v4: 120 дней правдоподобной жизни, курсы и все модули.
 
 Задача сидера — чтобы свежая установка сразу выглядела живой: обзор с весом,
 сном и водой, журнал с бытовыми записями, тренировки с прогрессией штанги,
-привычки, цели и два курса с таймкодами и конспектами.
+привычки, сферы и цели Компаса с вехами, проекты и задачи, инбокс, книги
+с мыслями и цитатами, финансы, чек-ины энергии и итоги недели/месяца.
 
 Принципы:
 
@@ -11,9 +12,12 @@
 * **идемпотентность** — :func:`seed` сначала удаляет прошлый демо-набор
   (:func:`clear_demo`), затем пишет новый, поэтому повторный запуск не
   дублирует строки;
-* **демо-строки помечены** — у ``entries``/``metrics`` это ``source='demo'``,
-  у привычек/целей/курсов — известные имена из констант модуля. ``--reset``
-  удаляет только их и не трогает записи пользователя (``source='telegram'``);
+* **демо-строки помечены** — у ``entries``/``metrics``/``transactions`` это
+  ``source='demo'``; у сфер, привычек, целей, проектов, задач, книг, счетов
+  и категорий — известные имена из констант модуля; у чек-инов — точная
+  метка ``created``, у итогов — флаг ``"demo": true`` в ``facts_json``.
+  ``--reset`` удаляет только демо-строки и не трогает записи пользователя
+  (``source='telegram'``, свои сущности);
 * **без побочных эффектов** — сидер пишет только в SQLite: ни Obsidian-vault,
   ни ``data/media`` он не касается, поэтому его можно гонять на временной БД.
 
@@ -40,15 +44,36 @@ from dataclasses import dataclass
 from datetime import date as _date
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from app.server.db import LegacySchemaError, connect, migrate
 
 __all__ = [
+    "DEMO_ACCOUNT_NAMES",
+    "DEMO_ANTI_GOALS",
+    "DEMO_ANTI_GOAL_TEXTS",
+    "DEMO_BOOKS",
+    "DEMO_BOOK_TITLES",
+    "DEMO_BUDGETS",
+    "DEMO_CATEGORIES",
+    "DEMO_CATEGORY_NAMES",
+    "DEMO_CHECKIN_MOODS",
     "DEMO_COURSE_TITLES",
+    "DEMO_EVENTS",
+    "DEMO_GOALS",
+    "DEMO_GOAL_META",
     "DEMO_GOAL_TITLES",
     "DEMO_HABIT_NAMES",
+    "DEMO_INBOX_TEXTS",
+    "DEMO_PROJECTS",
+    "DEMO_PROJECT_NAMES",
+    "DEMO_PROJECT_NOTES",
+    "DEMO_REVIEW_TEXTS",
     "DEMO_SOURCE",
+    "DEMO_SPHERES",
+    "DEMO_SPHERE_NAMES",
+    "DEMO_TASK_POOL",
+    "DEMO_TASK_TITLES",
     "DEFAULT_DAYS",
     "DEFAULT_SEED",
     "SeedStats",
@@ -78,13 +103,138 @@ DEMO_HABITS: tuple[tuple[str, str, int], ...] = (
 DEMO_HABIT_NAMES: tuple[str, ...] = tuple(name for name, _, _ in DEMO_HABITS)
 
 #: Демо-цели: заголовок, цель, старт, единица.
+#: Первые три — цели прошлого набора, остальные добавлены в v4 (§14 handoff).
+#: Порядок важен: test_seeder.py сверяет его с порядком строк в ``goals``.
 DEMO_GOALS: tuple[tuple[str, float, float, str], ...] = (
     ("Вес 78 кг", 78.0, 81.4, "кг"),
     ("Жим лёжа 90 кг", 90.0, 70.0, "кг"),
     ("Пройти курс по EMDR", 6.0, 0.0, "уроков"),
+    ("Закрыть квартал без просрочек", 100.0, 40.0, "%"),
+    ("Прочитать 12 книг", 12.0, 3.0, "книг"),
+    ("Накопить подушку на 3 месяца", 300000.0, 120000.0, "₽"),
+    ("Провести 10 встреч с друзьями", 10.0, 4.0, "встреч"),
+    ("8000 шагов каждый день", 30.0, 12.0, "дней"),
+    ("Разобрать рабочий бэклог", 40.0, 12.0, "задач"),
 )
 
 DEMO_GOAL_TITLES: tuple[str, ...] = tuple(title for title, _, _, _ in DEMO_GOALS)
+
+#: Сферы жизни по умолчанию (§10.1): имя, цвет из токенов темы, иконка SPA.
+DEMO_SPHERES: tuple[tuple[str, str, str], ...] = (
+    ("Работа и проекты", "#8e76a8", "briefcase"),
+    ("Обучение и развитие", "#7e98bc", "book"),
+    ("Личное и семья", "#c98f74", "user"),
+    ("Здоровье и ресурс", "#7fa890", "heart"),
+    ("Финансы и быт", "#b08e5e", "wallet"),
+)
+
+DEMO_SPHERE_NAMES: tuple[str, ...] = tuple(name for name, _, _ in DEMO_SPHERES)
+
+#: Детали цели: горизонт (year/quarter/month), сфера, «зачем», вехи.
+DEMO_GOAL_META: dict[str, tuple[str, str, str, tuple[str, ...]]] = {
+    "Вес 78 кг": (
+        "year",
+        "Здоровье и ресурс",
+        "Хочу вернуться к форме без жёстких диет и срывов",
+        (
+            "Взвешиваться пять раз в неделю",
+            "Держать дефицит около 300 ккал",
+            "Тренировки три раза в неделю",
+            "Пройти обследование осенью",
+        ),
+    ),
+    "Жим лёжа 90 кг": (
+        "year",
+        "Здоровье и ресурс",
+        "Сила как маркер, что тело становится крепче",
+        (
+            "Программа на четыре недели",
+            "Прибавлять 2,5 кг к снаряду",
+            "Следить за техникой на видео",
+        ),
+    ),
+    "Пройти курс по EMDR": (
+        "quarter",
+        "Обучение и развитие",
+        "Метод давно интересен, хочу понимать протокол, а не пересказ",
+        (
+            "Посмотреть первые три урока",
+            "Выписать восемь фаз протокола",
+            "Сделать практику «безопасное место»",
+            "Дописать дневник наблюдений",
+        ),
+    ),
+    "Закрыть квартал без просрочек": (
+        "quarter",
+        "Работа и проекты",
+        "Просрочки съедают нервы и доверие к плану",
+        (
+            "Держать бэклог не больше 20 задач",
+            "Планировать неделю в понедельник",
+            "Закрывать зависшие задачи до пятницы",
+        ),
+    ),
+    "Прочитать 12 книг": (
+        "year",
+        "Обучение и развитие",
+        "Меньше ленты, больше длинных текстов",
+        (
+            "20 страниц каждый день",
+            "Одна книга из очереди в месяц",
+            "Выписывать три мысли на книгу",
+        ),
+    ),
+    "Накопить подушку на 3 месяца": (
+        "year",
+        "Финансы и быт",
+        "Хочу спокойно пережить любую турбулентность",
+        (
+            "Посчитать месячные расходы",
+            "Открыть накопительный счёт",
+            "Настроить автопополнение",
+            "Довести до 300 тысяч рублей",
+        ),
+    ),
+    "Провести 10 встреч с друзьями": (
+        "quarter",
+        "Личное и семья",
+        "После пандемии живые встречи стали редкостью",
+        (
+            "Написать троим друзьям",
+            "Запланировать две встречи в месяц",
+            "Оставлять воскресенье свободным",
+        ),
+    ),
+    "8000 шагов каждый день": (
+        "month",
+        "Здоровье и ресурс",
+        "Движение как база энергии, а не спорт ради галочки",
+        (
+            "Гулять после обеда 20 минут",
+            "Выйти из транспорта на остановку раньше",
+            "Считать шаги в привычке",
+        ),
+    ),
+    "Разобрать рабочий бэклог": (
+        "month",
+        "Работа и проекты",
+        "Хочу видеть реальный план, а не свалку задач",
+        (
+            "Выгрузить всё из заметок",
+            "Разложить по проектам",
+            "Удалить то, что уже неактуально",
+        ),
+    ),
+}
+
+#: Анти-цели: период (month/quarter) и текст.
+DEMO_ANTI_GOALS: tuple[tuple[str, str], ...] = (
+    ("month", "Не проверять рабочие чаты после 20:00"),
+    ("month", "Не брать больше двух проектов параллельно"),
+    ("quarter", "Не залипать в ленте дольше 20 минут в день"),
+)
+
+DEMO_ANTI_GOAL_TEXTS: tuple[str, ...] = tuple(text for _, text in DEMO_ANTI_GOALS)
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +418,566 @@ NUTRITION_PHRASES: tuple[str, ...] = (
 
 
 # ---------------------------------------------------------------------------
+# Контент v4: проекты, задачи, инбокс
+# ---------------------------------------------------------------------------
+
+#: Проекты: имя, сфера, статус, срок (дней от сегодня), результат, этапы.
+DEMO_PROJECTS: tuple[
+    tuple[str, str, str, int, str, tuple[tuple[str, bool], ...]], ...
+] = (
+    (
+        "Ремонт кухни",
+        "Личное и семья",
+        "active",
+        45,
+        "Кухня без переделок: новые фасады, свет и полки",
+        (
+            ("Смета и подрядчик", True),
+            ("Заказать фасады", True),
+            ("Собрать полки", False),
+            ("Подключить свет", False),
+        ),
+    ),
+    (
+        "Курс по EMDR",
+        "Обучение и развитие",
+        "active",
+        30,
+        "Пройти шесть уроков и сдать дневник практики",
+        (
+            ("Посмотреть первые три урока", True),
+            ("Сделать практику «безопасное место»", True),
+            ("Дописать дневник наблюдений", False),
+            ("Сдать итоговую заметку", False),
+        ),
+    ),
+    (
+        "Подушка безопасности",
+        "Финансы и быт",
+        "active",
+        90,
+        "Три месяца расходов на отдельном счёте",
+        (
+            ("Посчитать месячные расходы", True),
+            ("Открыть накопительный счёт", True),
+            ("Настроить автопополнение", False),
+            ("Довести до 300 тысяч", False),
+        ),
+    ),
+    (
+        "Летний отпуск",
+        "Личное и семья",
+        "paused",
+        120,
+        "Две недели у моря в мае, без спешки и ноутбука",
+        (
+            ("Выбрать направление", True),
+            ("Сравнить билеты", False),
+            ("Забронировать жильё", False),
+        ),
+    ),
+    (
+        "Рабочий бэклог",
+        "Работа и проекты",
+        "idea",
+        60,
+        "Разобрать накопленные задачи и освободить голову",
+        (
+            ("Выгрузить все задачи из заметок", False),
+            ("Разложить по проектам", False),
+            ("Удалить лишнее", False),
+        ),
+    ),
+    (
+        "Форма к лету",
+        "Здоровье и ресурс",
+        "done",
+        -20,
+        "Вернуться к тренировкам три раза в неделю",
+        (
+            ("Собрать план тренировок", True),
+            ("Продержаться восемь недель", True),
+            ("Сделать замеры", True),
+        ),
+    ),
+)
+
+DEMO_PROJECT_NAMES: tuple[str, ...] = tuple(project[0] for project in DEMO_PROJECTS)
+
+#: Связь проекта с целью Компаса (не у всех проектов есть цель).
+DEMO_PROJECT_GOALS: dict[str, str] = {
+    "Курс по EMDR": "Пройти курс по EMDR",
+    "Подушка безопасности": "Накопить подушку на 3 месяца",
+    "Рабочий бэклог": "Разобрать рабочий бэклог",
+    "Форма к лету": "Жим лёжа 90 кг",
+    "Ремонт кухни": "",
+    "Летний отпуск": "",
+}
+
+#: Заметки и ссылки проектов: проект, вид (note/link), заголовок, текст, URL.
+DEMO_PROJECT_NOTES: tuple[tuple[str, str, str, str, str], ...] = (
+    (
+        "Ремонт кухни",
+        "note",
+        "Что важно",
+        "Не трогать мойку и плиту: меняем только фасады, свет и полки",
+        "",
+    ),
+    (
+        "Ремонт кухни",
+        "link",
+        "Референсы по свету",
+        "",
+        "https://www.ikea.com/ru/ru/",
+    ),
+    (
+        "Курс по EMDR",
+        "note",
+        "Конспект",
+        "Восемь фаз протокола: история, подготовка, оценка, десенсибилизация, установка, сканирование, завершение, переоценка",
+        "",
+    ),
+    (
+        "Курс по EMDR",
+        "link",
+        "Статья о методе",
+        "",
+        "https://ru.wikipedia.org/wiki/EMDR",
+    ),
+    (
+        "Подушка безопасности",
+        "note",
+        "Сколько нужно",
+        "Три месяца расходов — ориентир 300 тысяч, пополнение по 15 тысяч в месяц",
+        "",
+    ),
+    (
+        "Летний отпуск",
+        "link",
+        "Куда смотреть",
+        "",
+        "https://www.aviasales.ru/",
+    ),
+    (
+        "Рабочий бэклог",
+        "note",
+        "Правило",
+        "В бэклоге не больше 20 задач, остальное — в инбокс или в «когда-нибудь»",
+        "",
+    ),
+    (
+        "Форма к лету",
+        "note",
+        "Итог",
+        "Восемь недель по три тренировки: жим вырос, сон стал ровнее",
+        "",
+    ),
+)
+
+#: Задачи: заголовок, список (work/personal), сфера, теги, заметка.
+DEMO_TASK_POOL: tuple[tuple[str, str, str, str, str], ...] = (
+    ("Свести отчёт за неделю", "work", "Работа и проекты", "Отчёты", ""),
+    ("Ответить на письма по проекту", "work", "Работа и проекты", "", ""),
+    ("Созвон с командой по плану", "work", "Работа и проекты", "", ""),
+    ("Разобрать бэклог задач", "work", "Работа и проекты", "", ""),
+    (
+        "Подготовить презентацию к демо",
+        "work",
+        "Работа и проекты",
+        "Презентации",
+        "Три слайда: проблема, решение, цифры",
+    ),
+    ("Проверить макеты у дизайнера", "work", "Работа и проекты", "", ""),
+    ("Обновить статус проекта", "work", "Работа и проекты", "", ""),
+    ("Проверить счёт от подрядчика", "work", "Финансы и быт", "Бумаги", ""),
+    ("Спланировать спринт", "work", "Работа и проекты", "", ""),
+    ("Сделать ревью кода коллеги", "work", "Работа и проекты", "", ""),
+    ("Отправить документы бухгалтеру", "work", "Финансы и быт", "Бумаги", ""),
+    ("Подготовить ответ клиенту", "work", "Работа и проекты", "", ""),
+    ("Разобрать входящие до нуля", "work", "Работа и проекты", "", ""),
+    ("Забронировать переговорную", "work", "Работа и проекты", "", ""),
+    ("Написать план на неделю", "work", "Работа и проекты", "", ""),
+    ("Купить продукты на неделю", "personal", "Финансы и быт", "Покупки,Дом", "Рыба, овощи, творог"),
+    ("Погулять 40 минут", "personal", "Здоровье и ресурс", "Здоровье", ""),
+    ("Позвонить родителям", "personal", "Личное и семья", "Семья", ""),
+    ("Записаться к стоматологу", "personal", "Здоровье и ресурс", "Здоровье", ""),
+    ("Прибрать на рабочем столе", "personal", "Личное и семья", "Дом", ""),
+    ("Прочитать 20 страниц", "personal", "Обучение и развитие", "Чтение", ""),
+    ("Оплатить коммунальные", "personal", "Финансы и быт", "Бумаги", ""),
+    ("Сделать растяжку перед сном", "personal", "Здоровье и ресурс", "Здоровье", ""),
+    ("Купить подарок маме", "personal", "Личное и семья", "Семья,Покупки", "День рождения 12 декабря"),
+    ("Разобрать шкаф", "personal", "Личное и семья", "Дом", ""),
+    ("Сходить в бассейн", "personal", "Здоровье и ресурс", "Здоровье", ""),
+    ("Записать три идеи в инбокс", "personal", "Обучение и развитие", "", ""),
+    ("Проверить бюджет за месяц", "personal", "Финансы и быт", "Бумаги", ""),
+    ("Съездить за город", "personal", "Личное и семья", "Семья", ""),
+    ("Приготовить суп на два дня", "personal", "Личное и семья", "Дом", ""),
+)
+
+#: Жёсткие события: заголовок, список, сфера.
+DEMO_EVENTS: tuple[tuple[str, str, str], ...] = (
+    ("Созвон с командой", "work", "Работа и проекты"),
+    ("Встреча с подрядчиком", "personal", "Личное и семья"),
+    ("Сессия у терапевта", "personal", "Здоровье и ресурс"),
+    ("Стоматолог", "personal", "Здоровье и ресурс"),
+    ("Созвон с клиентом", "work", "Работа и проекты"),
+    ("Тренировка с тренером", "personal", "Здоровье и ресурс"),
+    ("Планёрка отдела", "work", "Работа и проекты"),
+    ("Ужин с друзьями", "personal", "Личное и семья"),
+    ("Дедлайн отчёта", "work", "Работа и проекты"),
+    ("Онлайн-лекция", "personal", "Обучение и развитие"),
+)
+
+#: Все заголовки демо-задач: по ним же они удаляются в :func:`clear_demo`.
+DEMO_TASK_TITLES: tuple[str, ...] = tuple(
+    [row[0] for row in DEMO_TASK_POOL] + [row[0] for row in DEMO_EVENTS]
+)
+
+#: Инбокс: пять неразобранных мыслей.
+DEMO_INBOX_TEXTS: tuple[str, ...] = (
+    "Записаться на диагностику машины",
+    "Посмотреть курс по инвестициям",
+    "Идея: разнести отчёты по неделям, а не по месяцам",
+    "Купить подарок маме на день рождения",
+    "Разобрать папку «Скачать» на ноутбуке",
+)
+
+
+# ---------------------------------------------------------------------------
+# Контент v4: библиотека
+# ---------------------------------------------------------------------------
+
+#: Книги: заголовок, автор, категория, полка, страниц, «зачем», приоритет.
+DEMO_BOOKS: tuple[tuple[str, str, str, str, int, str, int], ...] = (
+    (
+        "Атомные привычки",
+        "Джеймс Клир",
+        "nonfiction",
+        "reading",
+        320,
+        "Хочу выстроить систему, а не полагаться на силу воли",
+        1,
+    ),
+    (
+        "Тело помнит всё",
+        "Бессел ван дер Колк",
+        "nonfiction",
+        "reading",
+        560,
+        "Понять, как стресс живёт в теле, и помочь себе мягче",
+        2,
+    ),
+    (
+        "Думай медленно… решай быстро",
+        "Даниэль Канеман",
+        "nonfiction",
+        "queue",
+        650,
+        "Разобраться в своих ошибках мышления на работе",
+        1,
+    ),
+    (
+        "Чистый код",
+        "Роберт Мартин",
+        "pro",
+        "queue",
+        460,
+        "Хочу писать код, который легко читать через год",
+        2,
+    ),
+    (
+        "Проект «Аве Мария»",
+        "Энди Вейер",
+        "fiction",
+        "queue",
+        480,
+        "Давно хотел лёгкую фантастику на вечер",
+        3,
+    ),
+    (
+        "Сила воли",
+        "Келли Макгонигал",
+        "nonfiction",
+        "queue",
+        300,
+        "Понять, почему решения заканчиваются к вечеру",
+        4,
+    ),
+    (
+        "Sapiens. Краткая история человечества",
+        "Юваль Ной Харари",
+        "nonfiction",
+        "done",
+        520,
+        "Широкий взгляд на историю и наше место в ней",
+        0,
+    ),
+    (
+        "Глубокая работа",
+        "Кэл Ньюпорт",
+        "pro",
+        "done",
+        300,
+        "Вернуть себе концентрацию в мире уведомлений",
+        0,
+    ),
+    (
+        "Мастер и Маргарита",
+        "Михаил Булгаков",
+        "fiction",
+        "done",
+        480,
+        "Перечитать во взрослом возрасте",
+        0,
+    ),
+    (
+        "Дом, в котором…",
+        "Мариам Петросян",
+        "fiction",
+        "done",
+        960,
+        "Много раз советовали, наконец добрался",
+        0,
+    ),
+    (
+        "Основы маркетинга",
+        "Филип Котлер",
+        "pro",
+        "dropped",
+        800,
+        "Нужен был справочник по работе, оказался слишком академичным",
+        0,
+    ),
+    (
+        "Улисс",
+        "Джеймс Джойс",
+        "fiction",
+        "dropped",
+        900,
+        "Хотелось попробовать сложную прозу, пока не зашло",
+        0,
+    ),
+)
+
+DEMO_BOOK_TITLES: tuple[str, ...] = tuple(book[0] for book in DEMO_BOOKS)
+
+#: Три главные мысли книги (структурированный список из карточки §10.3).
+DEMO_BOOK_INSIGHTS: dict[str, tuple[str, ...]] = {
+    "Атомные привычки": (
+        "Система важнее цели: среда и повторение решают больше, чем мотивация",
+        "Привычка начинается с маленького действия, которое легко не пропустить",
+        "Хорошая привычка должна быть очевидной, привлекательной, простой и приятной",
+    ),
+    "Тело помнит всё": (
+        "Травма — это не слабость, а реакция тела на перегрузку",
+        "Безопасность и отношения важнее техник и протоколов",
+        "Возвращение к телесным ощущениям помогает выходить из замирания",
+    ),
+    "Думай медленно… решай быстро": (
+        "Быстрое мышление экономит силы, но подсовывает удобные ответы",
+        "Потери переживаются сильнее равных по размеру выигрышей",
+        "Полезно заранее фиксировать критерии решения, пока не включились эмоции",
+    ),
+    "Чистый код": (
+        "Код читают гораздо чаще, чем пишут",
+        "Хорошая функция делает одну вещь и называет её честно",
+        "Комментарий — это признак, что код можно выразить яснее",
+    ),
+    "Проект «Аве Мария»": (
+        "Инженерная смекалка спасает, когда план уже не работает",
+        "Наука — это разговор, а не одиночное озарение",
+        "Юмор держит на плаву даже в конце мира",
+    ),
+    "Сила воли": (
+        "Воля — это не характер, а запас, который восстанавливается",
+        "Сон и еда влияют на решения сильнее, чем обещания себе",
+        "Полезно менять среду, а не бороться с собой",
+    ),
+    "Sapiens. Краткая история человечества": (
+        "Общие истории позволяют большим группам людей сотрудничать",
+        "Империи, деньги и религии — технологии доверия, а не только власть",
+        "Прогресс не делает людей счастливее автоматически",
+    ),
+    "Глубокая работа": (
+        "Концентрация — навык, который прокачивается тренировкой",
+        "Фрагментированное внимание дороже, чем кажется",
+        "Ритуалы входа в работу снижают порог начала",
+    ),
+    "Мастер и Маргарита": (
+        "Свобода и ответственность идут вместе",
+        "Любовь и страх у Булгакова проверяют человека на прочность",
+        "Сатира на быт не устаревает",
+    ),
+    "Дом, в котором…": (
+        "Дом — это не место, а люди, которые тебя держат",
+        "Взросление не отменяет потребности в принадлежности",
+        "У каждого своя дверь наружу",
+    ),
+    "Основы маркетинга": (
+        "Ценность важнее цены",
+        "Сегментация — это отказ от «всем сразу»",
+        "Маркетинг начинается с продукта, а не с рекламы",
+    ),
+    "Улисс": (
+        "Один день может вместить целую жизнь",
+        "Форма важна не меньше содержания",
+        "Чтение требует терпения и медленного ритма",
+    ),
+}
+
+#: Копилка цитат: текст и страница.
+DEMO_BOOK_QUOTES: dict[str, tuple[tuple[str, int], ...]] = {
+    "Атомные привычки": (
+        ("Вы не поднимаетесь до уровня своих целей, вы опускаетесь до уровня своих систем", 32),
+        ("Каждое действие — это голос за того, кем вы хотите стать", 56),
+    ),
+    "Тело помнит всё": (
+        ("Травма — это не событие, а то, как тело его хранит", 41),
+    ),
+    "Думай медленно… решай быстро": (
+        ("Мы редко замечаем, что ответ пришёл раньше вопроса", 88),
+    ),
+    "Чистый код": (
+        ("Каждая функция должна делать одну вещь, делать её хорошо и только её", 74),
+    ),
+    "Sapiens. Краткая история человечества": (
+        ("Большие группы людей могут сотрудничать только благодаря общим мифам", 137),
+    ),
+    "Глубокая работа": (
+        ("Способность к концентрации становится всё более редкой и поэтому всё более ценной", 21),
+    ),
+    "Мастер и Маргарита": (
+        ("Кто сказал тебе, что нет на свете настоящей, верной, вечной любви?", 411),
+    ),
+    "Дом, в котором…": (
+        ("Мы все когда-нибудь уйдём, но дом останется", 702),
+    ),
+}
+
+#: Действия на внедрение: что превратить в задачу.
+DEMO_BOOK_ACTIONS: dict[str, tuple[str, ...]] = {
+    "Атомные привычки": ("Сделать привычку «20 страниц» очевидной: книга на подушке",),
+    "Тело помнит всё": ("Ввести 5 минут дыхания перед сном",),
+    "Думай медленно… решай быстро": ("Записывать критерии решения до встречи",),
+    "Чистый код": ("Вынести проверку отчётов в отдельную функцию",),
+    "Сила воли": ("Сдвинуть зарядку на утро, пока запас воли полный",),
+    "Глубокая работа": ("Забронировать два часа без уведомлений в календаре",),
+    "Sapiens. Краткая история человечества": ("Перечитать главу про деньги и выписать три мысли",),
+}
+
+
+# ---------------------------------------------------------------------------
+# Контент v4: финансы и рефлексия
+# ---------------------------------------------------------------------------
+
+#: Счета: имя, вид (cash/card/savings/broker), стартовый баланс в копейках.
+DEMO_ACCOUNTS: tuple[tuple[str, str, int], ...] = (
+    ("Наличные", "cash", 1200000),
+    ("Карта зарплатная", "card", 8450000),
+    ("Накопительный счёт", "savings", 42000000),
+)
+
+DEMO_ACCOUNT_NAMES: tuple[str, ...] = tuple(name for name, _, _ in DEMO_ACCOUNTS)
+
+#: Категории: имя, вид (income/expense), цвет маркера.
+DEMO_CATEGORIES: tuple[tuple[str, str, str], ...] = (
+    ("Еда и продукты", "expense", "#7fa890"),
+    ("Кафе и рестораны", "expense", "#c98f74"),
+    ("Транспорт", "expense", "#7e98bc"),
+    ("Дом и быт", "expense", "#b08e5e"),
+    ("Здоровье", "expense", "#8e76a8"),
+    ("Развлечения", "expense", "#7e98bc"),
+    ("Одежда", "expense", "#c98f74"),
+    ("Зарплата", "income", "#7fa890"),
+    ("Фриланс", "income", "#8e76a8"),
+    ("Проценты по вкладу", "income", "#b08e5e"),
+)
+
+DEMO_CATEGORY_NAMES: tuple[str, ...] = tuple(name for name, _, _ in DEMO_CATEGORIES)
+
+#: Шаблоны расходов: категория → (заметка, минимум, максимум в копейках).
+DEMO_EXPENSE_TEMPLATES: dict[str, tuple[tuple[str, int, int], ...]] = {
+    "Еда и продукты": (
+        ("Пятёрочка", 40000, 280000),
+        ("ВкусВилл", 60000, 340000),
+        ("Рынок: овощи и фрукты", 30000, 180000),
+        ("Доставка продуктов", 90000, 420000),
+    ),
+    "Кафе и рестораны": (
+        ("Кофе с собой", 18000, 60000),
+        ("Обед в кафе", 45000, 180000),
+        ("Ужин с друзьями", 120000, 450000),
+    ),
+    "Транспорт": (
+        ("Метро и автобус", 6000, 18000),
+        ("Такси", 25000, 120000),
+        ("Бензин", 300000, 550000),
+    ),
+    "Дом и быт": (
+        ("Хозяйственные мелочи", 30000, 150000),
+        ("Кухня: полки и свет", 150000, 600000),
+        ("Коммунальные услуги", 400000, 750000),
+    ),
+    "Здоровье": (
+        ("Аптека", 20000, 180000),
+        ("Стоматолог", 250000, 900000),
+        ("Абонемент в зал", 200000, 350000),
+    ),
+    "Развлечения": (
+        ("Кино", 60000, 140000),
+        ("Книги", 50000, 180000),
+        ("Концерт", 200000, 450000),
+    ),
+    "Одежда": (
+        ("Кроссовки", 350000, 900000),
+        ("Футболки и носки", 120000, 350000),
+    ),
+}
+
+#: Бюджеты на текущий месяц: категория, лимит в копейках.
+DEMO_BUDGETS: tuple[tuple[str, int], ...] = (
+    ("Еда и продукты", 4500000),
+    ("Кафе и рестораны", 1500000),
+    ("Транспорт", 800000),
+)
+
+#: Чек-ины энергии: состояния и их веса (§10.4).
+DEMO_CHECKIN_MOODS: tuple[str, ...] = (
+    "в потоке",
+    "спокойно",
+    "ровно",
+    "усталость",
+    "перегруз",
+)
+DEMO_CHECKIN_MOOD_WEIGHTS: tuple[int, ...] = (3, 4, 4, 3, 1)
+DEMO_CHECKIN_NOTES: tuple[str, ...] = (
+    "День прошёл ровно, вечером успел погулять",
+    "Много созвонов, к вечеру было пусто",
+    "Прогулка вернула силы",
+    "Спал мало, но держался на кофе",
+    "Хороший день без спешки",
+)
+#: Время создания демо-чек-инов: по нему :func:`clear_demo` отличает демо-строки.
+DEMO_CHECKIN_TIME = "T21:05:00"
+
+#: Итоги: период → (победы, что не успелось, фокус, забота).
+DEMO_REVIEW_TEXTS: dict[str, tuple[str, str, str, str]] = {
+    "week": (
+        "Закрыл два давних хвоста по работе и дошёл до тренировок три раза",
+        "Не успел дочитать книгу и разобрать шкаф — переношу без вины",
+        "На следующей неделе — два глубоких блока по проекту и одна встреча с друзьями",
+        "Оставить воскресенье свободным и гулять без телефона",
+    ),
+    "month": (
+        "Вошёл в ритм: тренировки, сон и чтение перестали быть подвигами",
+        "Пара задач из бэклога всё ещё висит — им не хватило приоритета",
+        "В фокусе — подушка безопасности и курс по EMDR",
+        "Забота: ложиться до 23:30 и не проверять чаты вечером",
+    ),
+}
+
+
+# ---------------------------------------------------------------------------
 # Статистика
 # ---------------------------------------------------------------------------
 
@@ -287,6 +997,25 @@ class SeedStats:
     notes: int = 0
     progress: int = 0
     transcripts: int = 0
+    # v4: сферы, дела, библиотека, финансы, рефлексия
+    spheres: int = 0
+    goal_steps: int = 0
+    anti_goals: int = 0
+    projects: int = 0
+    project_steps: int = 0
+    project_notes: int = 0
+    tasks: int = 0
+    inbox_items: int = 0
+    books: int = 0
+    book_insights: int = 0
+    book_quotes: int = 0
+    book_actions: int = 0
+    accounts: int = 0
+    categories: int = 0
+    transactions: int = 0
+    budgets: int = 0
+    checkins: int = 0
+    reviews: int = 0
 
     def as_dict(self) -> dict[str, int]:
         """Плоский словарь для логов и тестов."""
@@ -302,6 +1031,24 @@ class SeedStats:
             "notes": self.notes,
             "progress": self.progress,
             "transcripts": self.transcripts,
+            "spheres": self.spheres,
+            "goal_steps": self.goal_steps,
+            "anti_goals": self.anti_goals,
+            "projects": self.projects,
+            "project_steps": self.project_steps,
+            "project_notes": self.project_notes,
+            "tasks": self.tasks,
+            "inbox_items": self.inbox_items,
+            "books": self.books,
+            "book_insights": self.book_insights,
+            "book_quotes": self.book_quotes,
+            "book_actions": self.book_actions,
+            "accounts": self.accounts,
+            "categories": self.categories,
+            "transactions": self.transactions,
+            "budgets": self.budgets,
+            "checkins": self.checkins,
+            "reviews": self.reviews,
         }
 
     def summary(self) -> str:
@@ -311,7 +1058,20 @@ class SeedStats:
             "%d метрик" % self.metrics,
             "%d привычек" % self.habits,
             "%d отметок" % self.marks,
+            "%d сфер" % self.spheres,
             "%d целей" % self.goals,
+            "%d вех" % self.goal_steps,
+            "%d анти-целей" % self.anti_goals,
+            "%d проектов" % self.projects,
+            "%d задач" % self.tasks,
+            "%d в инбоксе" % self.inbox_items,
+            "%d книг" % self.books,
+            "%d счетов" % self.accounts,
+            "%d категорий" % self.categories,
+            "%d транзакций" % self.transactions,
+            "%d бюджетов" % self.budgets,
+            "%d чек-инов" % self.checkins,
+            "%d итогов" % self.reviews,
             "%d курсов" % self.courses,
             "%d уроков" % self.lessons,
             "%d сегментов" % self.segments,
@@ -333,11 +1093,36 @@ def _placeholders(values: Sequence[Any]) -> str:
 def clear_demo(conn: sqlite3.Connection) -> SeedStats:
     """Удаляет только демо-данные и возвращает число удалённых строк.
 
-    Демо-строки журнала и метрик узнаются по ``source='demo'``; привычки,
-    цели и курсы — по именам из констант этого модуля. Пользовательские
-    записи (``source='telegram'``, свои привычки и цели) остаются на месте.
+    Демо-строки узнаются по маркерам, которые ставит сидер:
+
+    * ``source='demo'`` — ``entries``/``metrics``/``transactions``;
+    * известные имена и заголовки из констант модуля — сферы, привычки, цели,
+      анти-цели, проекты, задачи, инбокс, книги, счета и категории;
+    * точная метка ``created`` (21:05 по Москве) — чек-ины;
+    * ``"demo": true`` в ``facts_json`` — итоги.
+
+    Пользовательские записи (``source='telegram'``, свои сферы, цели, книги
+    и т.п.) остаются на месте. Порядок удалений учитывает внешние ключи:
+    сначала потомки, справочники — после них; пользовательские цели
+    отвязываются от демо-сфер, чтобы ``spheres`` можно было удалить.
     """
     stats = SeedStats()
+    habit_ph = _placeholders(DEMO_HABIT_NAMES)
+    goal_ph = _placeholders(DEMO_GOAL_TITLES)
+    course_ph = _placeholders(DEMO_COURSE_TITLES)
+    sphere_ph = _placeholders(DEMO_SPHERE_NAMES)
+    anti_ph = _placeholders(DEMO_ANTI_GOAL_TEXTS)
+    project_ph = _placeholders(DEMO_PROJECT_NAMES)
+    task_ph = _placeholders(DEMO_TASK_TITLES)
+    inbox_ph = _placeholders(DEMO_INBOX_TEXTS)
+    book_ph = _placeholders(DEMO_BOOK_TITLES)
+    account_ph = _placeholders(DEMO_ACCOUNT_NAMES)
+    category_match = " OR ".join(["(name = ? AND kind = ?)"] * len(DEMO_CATEGORIES))
+    category_params = tuple(
+        value for name, kind, _ in DEMO_CATEGORIES for value in (name, kind)
+    )
+    checkin_like = "%" + DEMO_CHECKIN_TIME + TZ_SUFFIX
+
     with conn:
         stats.entries = _count(
             conn, "SELECT COUNT(*) FROM entries WHERE source = ?", (DEMO_SOURCE,)
@@ -348,55 +1133,178 @@ def clear_demo(conn: sqlite3.Connection) -> SeedStats:
         stats.marks = _count(
             conn,
             "SELECT COUNT(*) FROM habit_marks WHERE habit_id IN "
-            "(SELECT id FROM habits WHERE name IN (%s))" % _placeholders(DEMO_HABIT_NAMES),
+            "(SELECT id FROM habits WHERE name IN (%s))" % habit_ph,
             DEMO_HABIT_NAMES,
         )
         stats.habits = _count(
             conn,
-            "SELECT COUNT(*) FROM habits WHERE name IN (%s)" % _placeholders(DEMO_HABIT_NAMES),
+            "SELECT COUNT(*) FROM habits WHERE name IN (%s)" % habit_ph,
             DEMO_HABIT_NAMES,
+        )
+        stats.spheres = _count(
+            conn,
+            "SELECT COUNT(*) FROM spheres WHERE name IN (%s)" % sphere_ph,
+            DEMO_SPHERE_NAMES,
         )
         stats.goals = _count(
             conn,
-            "SELECT COUNT(*) FROM goals WHERE title IN (%s)" % _placeholders(DEMO_GOAL_TITLES),
+            "SELECT COUNT(*) FROM goals WHERE title IN (%s)" % goal_ph,
             DEMO_GOAL_TITLES,
+        )
+        stats.goal_steps = _count(
+            conn,
+            "SELECT COUNT(*) FROM goal_steps WHERE goal_id IN "
+            "(SELECT id FROM goals WHERE title IN (%s))" % goal_ph,
+            DEMO_GOAL_TITLES,
+        )
+        stats.anti_goals = _count(
+            conn,
+            "SELECT COUNT(*) FROM anti_goals WHERE text IN (%s)" % anti_ph,
+            DEMO_ANTI_GOAL_TEXTS,
+        )
+        stats.projects = _count(
+            conn,
+            "SELECT COUNT(*) FROM projects WHERE name IN (%s)" % project_ph,
+            DEMO_PROJECT_NAMES,
+        )
+        stats.project_steps = _count(
+            conn,
+            "SELECT COUNT(*) FROM project_steps WHERE project_id IN "
+            "(SELECT id FROM projects WHERE name IN (%s))" % project_ph,
+            DEMO_PROJECT_NAMES,
+        )
+        stats.project_notes = _count(
+            conn,
+            "SELECT COUNT(*) FROM project_notes WHERE project_id IN "
+            "(SELECT id FROM projects WHERE name IN (%s))" % project_ph,
+            DEMO_PROJECT_NAMES,
+        )
+        stats.tasks = _count(
+            conn,
+            "SELECT COUNT(*) FROM tasks WHERE title IN (%s)" % task_ph,
+            DEMO_TASK_TITLES,
+        )
+        stats.inbox_items = _count(
+            conn,
+            "SELECT COUNT(*) FROM inbox_items WHERE text IN (%s)" % inbox_ph,
+            DEMO_INBOX_TEXTS,
+        )
+        stats.books = _count(
+            conn,
+            "SELECT COUNT(*) FROM books WHERE title IN (%s)" % book_ph,
+            DEMO_BOOK_TITLES,
+        )
+        stats.book_insights = _count(
+            conn,
+            "SELECT COUNT(*) FROM book_insights WHERE book_id IN "
+            "(SELECT id FROM books WHERE title IN (%s))" % book_ph,
+            DEMO_BOOK_TITLES,
+        )
+        stats.book_quotes = _count(
+            conn,
+            "SELECT COUNT(*) FROM book_quotes WHERE book_id IN "
+            "(SELECT id FROM books WHERE title IN (%s))" % book_ph,
+            DEMO_BOOK_TITLES,
+        )
+        stats.book_actions = _count(
+            conn,
+            "SELECT COUNT(*) FROM book_actions WHERE book_id IN "
+            "(SELECT id FROM books WHERE title IN (%s))" % book_ph,
+            DEMO_BOOK_TITLES,
+        )
+        stats.accounts = _count(
+            conn,
+            "SELECT COUNT(*) FROM finance_accounts WHERE name IN (%s)" % account_ph,
+            DEMO_ACCOUNT_NAMES,
+        )
+        stats.categories = _count(
+            conn,
+            "SELECT COUNT(*) FROM finance_categories WHERE %s" % category_match,
+            category_params,
+        )
+        stats.transactions = _count(
+            conn, "SELECT COUNT(*) FROM transactions WHERE source = ?", (DEMO_SOURCE,)
+        )
+        stats.budgets = _count(
+            conn,
+            "SELECT COUNT(*) FROM budgets WHERE category_id IN "
+            "(SELECT id FROM finance_categories WHERE %s)" % category_match,
+            category_params,
+        )
+        stats.checkins = _count(
+            conn, "SELECT COUNT(*) FROM checkins WHERE created LIKE ?", (checkin_like,)
+        )
+        stats.reviews = _count(
+            conn, "SELECT COUNT(*) FROM reviews WHERE facts_json LIKE ?", ('%"demo": true%',)
         )
         stats.courses = _count(
             conn,
-            "SELECT COUNT(*) FROM courses WHERE title IN (%s)"
-            % _placeholders(DEMO_COURSE_TITLES),
+            "SELECT COUNT(*) FROM courses WHERE title IN (%s)" % course_ph,
             DEMO_COURSE_TITLES,
         )
         stats.lessons = _count(
             conn,
             "SELECT COUNT(*) FROM lessons WHERE course_id IN "
-            "(SELECT id FROM courses WHERE title IN (%s))" % _placeholders(DEMO_COURSE_TITLES),
+            "(SELECT id FROM courses WHERE title IN (%s))" % course_ph,
             DEMO_COURSE_TITLES,
         )
         stats.segments = _count(
             conn,
             "SELECT COUNT(*) FROM segments WHERE lesson_id IN (SELECT id FROM lessons "
-            "WHERE course_id IN (SELECT id FROM courses WHERE title IN (%s)))"
-            % _placeholders(DEMO_COURSE_TITLES),
+            "WHERE course_id IN (SELECT id FROM courses WHERE title IN (%s)))" % course_ph,
             DEMO_COURSE_TITLES,
         )
 
+        # Журнал, метрики и транзакции — по метке source.
         conn.execute("DELETE FROM entries WHERE source = ?", (DEMO_SOURCE,))
         conn.execute("DELETE FROM metrics WHERE source = ?", (DEMO_SOURCE,))
-        conn.execute(
-            "DELETE FROM habits WHERE name IN (%s)" % _placeholders(DEMO_HABIT_NAMES),
-            DEMO_HABIT_NAMES,
-        )
-        conn.execute(
-            "DELETE FROM goals WHERE title IN (%s)" % _placeholders(DEMO_GOAL_TITLES),
-            DEMO_GOAL_TITLES,
-        )
-        conn.execute(
-            "DELETE FROM courses WHERE title IN (%s)" % _placeholders(DEMO_COURSE_TITLES),
-            DEMO_COURSE_TITLES,
-        )
-    return stats
+        conn.execute("DELETE FROM transactions WHERE source = ?", (DEMO_SOURCE,))
 
+        # Библиотека: инсайты, цитаты и действия уходят каскадом.
+        conn.execute("DELETE FROM books WHERE title IN (%s)" % book_ph, DEMO_BOOK_TITLES)
+
+        # Задачи — до целей/проектов/сфер: меньше SET NULL-обновлений.
+        conn.execute("DELETE FROM tasks WHERE title IN (%s)" % task_ph, DEMO_TASK_TITLES)
+        conn.execute("DELETE FROM projects WHERE name IN (%s)" % project_ph, DEMO_PROJECT_NAMES)
+        conn.execute("DELETE FROM inbox_items WHERE text IN (%s)" % inbox_ph, DEMO_INBOX_TEXTS)
+
+        # Привычки (отметки каскадом) — до сфер, на которые они ссылаются.
+        conn.execute("DELETE FROM habits WHERE name IN (%s)" % habit_ph, DEMO_HABIT_NAMES)
+
+        # Пользовательские цели не должны блокировать удаление демо-сфер
+        # (goals.sphere_id — NO ACTION по §11), поэтому сначала отвязываем их.
+        conn.execute(
+            "UPDATE goals SET sphere_id = NULL WHERE sphere_id IN "
+            "(SELECT id FROM spheres WHERE name IN (%s)) AND title NOT IN (%s)"
+            % (sphere_ph, goal_ph),
+            DEMO_SPHERE_NAMES + DEMO_GOAL_TITLES,
+        )
+        conn.execute("DELETE FROM goals WHERE title IN (%s)" % goal_ph, DEMO_GOAL_TITLES)
+        conn.execute("DELETE FROM spheres WHERE name IN (%s)" % sphere_ph, DEMO_SPHERE_NAMES)
+        conn.execute("DELETE FROM anti_goals WHERE text IN (%s)" % anti_ph, DEMO_ANTI_GOAL_TEXTS)
+
+        # Курсы: уроки, сегменты, заметки и прогресс — каскадом.
+        conn.execute("DELETE FROM courses WHERE title IN (%s)" % course_ph, DEMO_COURSE_TITLES)
+
+        # Финансы: бюджеты, затем категории и счета.
+        conn.execute(
+            "DELETE FROM budgets WHERE category_id IN "
+            "(SELECT id FROM finance_categories WHERE %s)" % category_match,
+            category_params,
+        )
+        conn.execute(
+            "DELETE FROM finance_categories WHERE %s" % category_match,
+            category_params,
+        )
+        conn.execute(
+            "DELETE FROM finance_accounts WHERE name IN (%s)" % account_ph,
+            DEMO_ACCOUNT_NAMES,
+        )
+
+        # Рефлексия: чек-ины по точной метке времени, итоги — по флагу в facts.
+        conn.execute("DELETE FROM checkins WHERE created LIKE ?", (checkin_like,))
+        conn.execute("DELETE FROM reviews WHERE facts_json LIKE ?", ('%"demo": true%',))
+    return stats
 
 def _count(conn: sqlite3.Connection, sql: str, params: Sequence[Any] = ()) -> int:
     row = conn.execute(sql, tuple(params)).fetchone()
@@ -454,9 +1362,11 @@ def seed(
         entries, metrics = _build_daily(rnd, dates)
         _insert_entries(conn, entries)
         _insert_metrics(conn, metrics)
-        marks = _build_habits(conn, rnd, dates, stamp)
-        _build_goals(conn, rnd, last_day, stamp)
+        spheres = _build_spheres(conn, stamp)
+        marks = _build_habits(conn, rnd, dates, stamp, spheres)
+        goals, goal_steps = _build_goals(conn, rnd, last_day, stamp, spheres)
         courses = _build_courses(conn, rnd, last_day, stamp)
+        world = _build_world(conn, rnd, dates, last_day, stamp, spheres, goals)
 
     stats.entries = len(entries)
     stats.metrics = len(metrics)
@@ -469,6 +1379,10 @@ def seed(
     stats.notes = courses["notes"]
     stats.progress = courses["progress"]
     stats.transcripts = courses["transcripts"]
+    stats.spheres = len(DEMO_SPHERES)
+    stats.goal_steps = goal_steps
+    for field, value in world.items():
+        setattr(stats, field, value)
     return stats
 
 
@@ -614,18 +1528,55 @@ def _insert_metrics(conn: sqlite3.Connection, metrics: Sequence[tuple]) -> None:
     )
 
 
-# -- привычки, цели --------------------------------------------------------
+# -- сферы, привычки, цели -------------------------------------------------
+
+
+def _build_spheres(conn: sqlite3.Connection, stamp: str) -> dict[str, int]:
+    """Создаёт пять сфер из §10.1; возвращает отображение имя → id."""
+    spheres: dict[str, int] = {}
+    for sort, (name, color, icon) in enumerate(DEMO_SPHERES):
+        cursor = conn.execute(
+            "INSERT INTO spheres (name, color, icon, sort, archived, created) "
+            "VALUES (?, ?, ?, ?, 0, ?)",
+            (name, color, icon, sort, stamp),
+        )
+        spheres[name] = int(cursor.lastrowid or 0)
+    return spheres
 
 
 def _build_habits(
-    conn: sqlite3.Connection, rnd: random.Random, dates: Sequence[_date], stamp: str
+    conn: sqlite3.Connection,
+    rnd: random.Random,
+    dates: Sequence[_date],
+    stamp: str,
+    spheres: Mapping[str, int],
 ) -> int:
-    """Создаёт 4 привычки и отметки примерно на 80% дней."""
+    """Создаёт 4 привычки (со сферой и цветом) и отметки примерно на 80% дней."""
+    sphere_by_habit = {
+        "Вода 2 литра": "Здоровье и ресурс",
+        "Прогулка 8 тысяч шагов": "Здоровье и ресурс",
+        "Чтение 20 минут": "Обучение и развитие",
+        "Растяжка перед сном": "Здоровье и ресурс",
+    }
+    color_by_habit = {
+        "Вода 2 литра": "#7e98bc",
+        "Прогулка 8 тысяч шагов": "#7fa890",
+        "Чтение 20 минут": "#8e76a8",
+        "Растяжка перед сном": "#b08e5e",
+    }
     marks: list[tuple[int, str, float]] = []
     for name, emoji, target in DEMO_HABITS:
         cursor = conn.execute(
-            "INSERT INTO habits (name, emoji, target_per_week, created) VALUES (?, ?, ?, ?)",
-            (name, emoji, target, stamp),
+            "INSERT INTO habits (name, emoji, target_per_week, sphere_id, color, created) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                name,
+                emoji,
+                target,
+                spheres.get(sphere_by_habit[name]),
+                color_by_habit[name],
+                stamp,
+            ),
         )
         habit_id = int(cursor.lastrowid or 0)
         for day in dates:
@@ -637,17 +1588,609 @@ def _build_habits(
     return len(marks)
 
 
-def _build_goals(conn: sqlite3.Connection, rnd: random.Random, today: _date, stamp: str) -> None:
-    """Три цели с правдоподобным текущим значением."""
+def _build_goals(
+    conn: sqlite3.Connection,
+    rnd: random.Random,
+    today: _date,
+    stamp: str,
+    spheres: Mapping[str, int],
+) -> tuple[dict[str, int], int]:
+    """Девять целей по горизонтам: сфера, «зачем», срок и вехи.
+
+    ``progress`` остаётся 0: прогресс считается API по закрытым вехам (§12.1).
+    """
+    goal_ids: dict[str, int] = {}
+    steps_total = 0
+    deadline_days = {
+        "year": (150, 210, 270, 330),
+        "quarter": (45, 60, 80, 90),
+        "month": (14, 21, 28),
+    }
     for title, target, start, unit in DEMO_GOALS:
+        horizon, sphere_name, why, steps = DEMO_GOAL_META[title]
         done = rnd.uniform(0.15, 0.65)
         current = start + (target - start) * done
-        deadline = today + timedelta(days=rnd.choice((30, 60, 90, 120)))
-        conn.execute(
-            "INSERT INTO goals (title, target, current, unit, deadline, status, created) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (title, target, round(current, 1), unit, deadline.isoformat(), "active", stamp),
+        deadline = today + timedelta(days=rnd.choice(deadline_days[horizon]))
+        cursor = conn.execute(
+            "INSERT INTO goals (title, target, current, unit, deadline, status, sphere_id, "
+            "horizon, why, progress, created) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+            (
+                title,
+                target,
+                round(current, 1),
+                unit,
+                deadline.isoformat(),
+                "active",
+                spheres.get(sphere_name),
+                horizon,
+                why,
+                stamp,
+            ),
         )
+        goal_id = int(cursor.lastrowid or 0)
+        goal_ids[title] = goal_id
+        done_steps = rnd.randint(1, max(1, len(steps) - 1))
+        for sort, step_title in enumerate(steps):
+            due = today + timedelta(days=rnd.randint(-20, 60))
+            conn.execute(
+                "INSERT INTO goal_steps (goal_id, title, done, due, sort, created) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (goal_id, step_title, 1 if sort < done_steps else 0, due.isoformat(), sort, stamp),
+            )
+            steps_total += 1
+    return goal_ids, steps_total
+
+
+# -- v4: проекты, задачи, инбокс ------------------------------------------
+
+
+def _build_world(
+    conn: sqlite3.Connection,
+    rnd: random.Random,
+    dates: Sequence[_date],
+    today: _date,
+    stamp: str,
+    spheres: Mapping[str, int],
+    goals: Mapping[str, int],
+) -> dict[str, int]:
+    """Строит новые сущности v4 и возвращает счётчики созданных строк."""
+    counts = {
+        "anti_goals": 0,
+        "projects": 0,
+        "project_steps": 0,
+        "project_notes": 0,
+        "tasks": 0,
+        "inbox_items": 0,
+        "books": 0,
+        "book_insights": 0,
+        "book_quotes": 0,
+        "book_actions": 0,
+        "accounts": 0,
+        "categories": 0,
+        "transactions": 0,
+        "budgets": 0,
+        "checkins": 0,
+        "reviews": 0,
+    }
+    _build_anti_goals(conn, stamp, counts)
+    projects = _build_projects(conn, rnd, today, stamp, spheres, goals, counts)
+    _build_tasks(conn, rnd, dates, today, stamp, spheres, projects, goals, counts)
+    _build_inbox(conn, stamp, counts)
+    _build_books(conn, rnd, today, stamp, counts)
+    _build_finance(conn, rnd, dates, today, stamp, counts)
+    _build_checkins(conn, rnd, dates, counts)
+    _build_reviews(conn, today, stamp, counts)
+    return counts
+
+
+def _build_anti_goals(
+    conn: sqlite3.Connection, stamp: str, counts: dict[str, int]
+) -> None:
+    """Две анти-цели на месяц и одна на квартал."""
+    for period, text in DEMO_ANTI_GOALS:
+        conn.execute(
+            "INSERT INTO anti_goals (period, text, active, created) VALUES (?, ?, 1, ?)",
+            (period, text, stamp),
+        )
+        counts["anti_goals"] += 1
+
+
+def _build_projects(
+    conn: sqlite3.Connection,
+    rnd: random.Random,
+    today: _date,
+    stamp: str,
+    spheres: Mapping[str, int],
+    goals: Mapping[str, int],
+    counts: dict[str, int],
+) -> dict[str, int]:
+    """Пять живых проектов и один завершённый: этапы, заметки и ссылки."""
+    project_ids: dict[str, int] = {}
+    for name, sphere_name, status, deadline_offset, outcome, steps in DEMO_PROJECTS:
+        created = today - timedelta(days=rnd.randint(30, 120))
+        deadline = today + timedelta(days=deadline_offset)
+        cursor = conn.execute(
+            "INSERT INTO projects (name, sphere_id, goal_id, deadline, status, outcome, "
+            "description, created, updated) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                name,
+                spheres.get(sphere_name),
+                goals.get(DEMO_PROJECT_GOALS.get(name, "")),
+                deadline.isoformat(),
+                status,
+                outcome,
+                "",
+                _ts(created, 10, 0),
+                stamp if status != "idea" else None,
+            ),
+        )
+        project_id = int(cursor.lastrowid or 0)
+        project_ids[name] = project_id
+        counts["projects"] += 1
+        for sort, (step_title, done) in enumerate(steps):
+            conn.execute(
+                "INSERT INTO project_steps (project_id, title, done, sort) VALUES (?, ?, ?, ?)",
+                (project_id, step_title, 1 if done else 0, sort),
+            )
+            counts["project_steps"] += 1
+
+    for project_name, kind, title, body, url in DEMO_PROJECT_NOTES:
+        project_id = project_ids.get(project_name)
+        if project_id is None:  # pragma: no cover - защита от рассинхрона констант
+            continue
+        conn.execute(
+            "INSERT INTO project_notes (project_id, kind, title, body, url, created) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (project_id, kind, title, body, url, stamp),
+        )
+        counts["project_notes"] += 1
+    return project_ids
+
+
+def _build_tasks(
+    conn: sqlite3.Connection,
+    rnd: random.Random,
+    dates: Sequence[_date],
+    today: _date,
+    stamp: str,
+    spheres: Mapping[str, int],
+    projects: Mapping[str, int],
+    goals: Mapping[str, int],
+    counts: dict[str, int],
+) -> None:
+    """120 задач: закрытые, открытые, жёсткие события и повторения.
+
+    Видимые названия берутся из :data:`DEMO_TASK_TITLES` — по ним же
+    :func:`clear_demo` удаляет демо-задачи, не трогая записи пользователя.
+    """
+    project_pool = list(projects.values())
+    goal_pool = list(goals.values())
+    span = max(1, len(dates) - 1)
+    resources = ("must", "important", "low")
+
+    def insert(
+        title: str,
+        list_kind: str,
+        sphere_name: str,
+        tags: str,
+        note: str,
+        *,
+        created: str,
+        due_date: Any = None,
+        start_at: Any = None,
+        end_at: Any = None,
+        resource: str = "important",
+        status: str = "todo",
+        recurrence: str = "",
+        done_at: Any = None,
+        project_id: Any = None,
+        goal_id: Any = None,
+    ) -> None:
+        conn.execute(
+            "INSERT INTO tasks (title, sphere_id, project_id, goal_id, list_kind, tags, "
+            "due_date, start_at, end_at, resource, status, recurrence, notes, created, done_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                title,
+                spheres.get(sphere_name),
+                project_id,
+                goal_id,
+                list_kind,
+                tags,
+                due_date,
+                start_at,
+                end_at,
+                resource,
+                status,
+                recurrence,
+                note,
+                created,
+                done_at,
+            ),
+        )
+        counts["tasks"] += 1
+
+    # 74 закрытых задачи: дата создания и закрытия внутри окна демо-данных.
+    for index in range(74):
+        title, list_kind, sphere_name, tags, note = DEMO_TASK_POOL[
+            index % len(DEMO_TASK_POOL)
+        ]
+        created_day = today - timedelta(days=rnd.randint(3, max(3, span)))
+        if index < 4:
+            # Несколько задач закрыты сегодня: недельный итог не должен быть пустым.
+            done_day = today
+            due_day = today
+        else:
+            done_day = min(today, created_day + timedelta(days=rnd.randint(0, 2)))
+            due_day = created_day + timedelta(days=rnd.randint(0, 1))
+        insert(
+            title,
+            list_kind,
+            sphere_name,
+            tags,
+            note,
+            created=_ts(created_day, rnd.choice((9, 10, 11)), 0),
+            due_date=due_day.isoformat(),
+            resource=rnd.choices(resources, weights=(1, 2, 2))[0],
+            status="done",
+            done_at=_ts(done_day, rnd.choice((17, 18, 19, 20)), rnd.choice((0, 15, 30, 45))),
+            project_id=project_pool[rnd.randrange(len(project_pool))] if rnd.random() < 0.2 else None,
+            goal_id=goal_pool[rnd.randrange(len(goal_pool))] if rnd.random() < 0.12 else None,
+        )
+
+    # 36 открытых задач: часть просрочена, часть — на сегодня и неделю вперёд.
+    due_offsets = (-3, -2, -1, 0, 0, 0, 1, 1, 2, 3, 4, 5, 6, 7, 10, 14)
+    for index in range(36):
+        title, list_kind, sphere_name, tags, note = DEMO_TASK_POOL[
+            (index * 7 + 3) % len(DEMO_TASK_POOL)
+        ]
+        created_day = today - timedelta(days=rnd.randint(0, max(0, min(7, span))))
+        due_day = today + timedelta(days=rnd.choice(due_offsets))
+        recurrence = ""
+        if index % 3 == 0:
+            recurrence = rnd.choice(("daily", "weekly:1,3,5", "weekly:2,4", "monthly:15"))
+        insert(
+            title,
+            list_kind,
+            sphere_name,
+            tags,
+            note,
+            created=_ts(created_day, 12, 0),
+            due_date=due_day.isoformat(),
+            resource=rnd.choices(resources, weights=(1, 3, 3))[0],
+            recurrence=recurrence,
+            project_id=project_pool[rnd.randrange(len(project_pool))] if rnd.random() < 0.25 else None,
+            goal_id=goal_pool[rnd.randrange(len(goal_pool))] if rnd.random() < 0.15 else None,
+        )
+
+    # 8 жёстких событий: дата плюс интервал времени.
+    for index in range(8):
+        title, list_kind, sphere_name = DEMO_EVENTS[index % len(DEMO_EVENTS)]
+        day = today + timedelta(days=rnd.choice((0, 1, 1, 2, 2, 3, 5, 7)))
+        hour = rnd.choice((9, 10, 11, 14, 16, 18))
+        duration = rnd.choice((30, 45, 60, 90))
+        insert(
+            title,
+            list_kind,
+            sphere_name,
+            "",
+            "",
+            created=stamp,
+            due_date=day.isoformat(),
+            start_at=_ts(day, hour, 0),
+            end_at=_ts(day, hour + duration // 60, duration % 60),
+            resource="must" if title == "Дедлайн отчёта" else rnd.choices(resources, weights=(2, 3, 1))[0],
+        )
+
+    # 2 отменённые задачи: план меняется, и это нормально.
+    for index in range(2):
+        title, list_kind, sphere_name, tags, note = DEMO_TASK_POOL[
+            (index * 11 + 5) % len(DEMO_TASK_POOL)
+        ]
+        created_day = today - timedelta(days=rnd.randint(10, max(10, span)))
+        insert(
+            title,
+            list_kind,
+            sphere_name,
+            tags,
+            note,
+            created=_ts(created_day, 9, 30),
+            due_date=(today - timedelta(days=rnd.randint(1, 20))).isoformat(),
+            resource="low",
+            status="cancelled",
+        )
+
+
+def _build_inbox(conn: sqlite3.Connection, stamp: str, counts: dict[str, int]) -> None:
+    """Пять неразобранных элементов инбокса."""
+    for text in DEMO_INBOX_TEXTS:
+        conn.execute(
+            "INSERT INTO inbox_items (text, status, converted_type, converted_id, created) "
+            "VALUES (?, 'new', '', NULL, ?)",
+            (text, stamp),
+        )
+        counts["inbox_items"] += 1
+
+
+# -- v4: библиотека --------------------------------------------------------
+
+
+def _build_books(
+    conn: sqlite3.Connection, rnd: random.Random, today: _date, stamp: str, counts: dict[str, int]
+) -> None:
+    """12 книг по полкам §14 плюс инсайты, цитаты и действия на внедрение."""
+    done_finish_offsets = (1, 18, 45, 70)
+    done_seen = 0
+    for title, author, category, shelf, pages_total, why, priority in DEMO_BOOKS:
+        if shelf == "done":
+            pages_read = pages_total
+        elif shelf == "queue":
+            pages_read = 0
+        elif shelf == "reading":
+            pages_read = max(1, int(pages_total * rnd.uniform(0.2, 0.65)))
+        else:
+            pages_read = int(pages_total * rnd.uniform(0.03, 0.15))
+        rating = None
+        finished_at = None
+        if shelf == "done":
+            rating = rnd.randint(4, 5)
+            # Разные даты завершения: недельный итог видит хотя бы одну книгу.
+            finished_at = (
+                today - timedelta(days=done_finish_offsets[done_seen % len(done_finish_offsets)])
+            ).isoformat()
+            done_seen += 1
+        elif shelf == "dropped":
+            rating = rnd.randint(2, 3)
+            finished_at = (today - timedelta(days=rnd.randint(5, 90))).isoformat()
+        created = today - timedelta(days=rnd.randint(20, 140))
+        cursor = conn.execute(
+            "INSERT INTO books (title, author, category, pages_total, pages_read, shelf, "
+            "rating, why, priority, finished_at, created, updated) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                title,
+                author,
+                category,
+                pages_total,
+                pages_read,
+                shelf,
+                rating,
+                why,
+                priority,
+                finished_at,
+                _ts(created, 11, 0),
+                stamp,
+            ),
+        )
+        book_id = int(cursor.lastrowid or 0)
+        counts["books"] += 1
+        for sort, insight in enumerate(DEMO_BOOK_INSIGHTS.get(title, ())):
+            conn.execute(
+                "INSERT INTO book_insights (book_id, text, sort) VALUES (?, ?, ?)",
+                (book_id, insight, sort),
+            )
+            counts["book_insights"] += 1
+        for quote, page in DEMO_BOOK_QUOTES.get(title, ()):
+            conn.execute(
+                "INSERT INTO book_quotes (book_id, text, page, created) VALUES (?, ?, ?, ?)",
+                (book_id, quote, page, stamp),
+            )
+            counts["book_quotes"] += 1
+        for action in DEMO_BOOK_ACTIONS.get(title, ()):
+            conn.execute(
+                "INSERT INTO book_actions (book_id, text, task_id, created) VALUES (?, ?, NULL, ?)",
+                (book_id, action, stamp),
+            )
+            counts["book_actions"] += 1
+
+
+# -- v4: финансы -----------------------------------------------------------
+
+
+def _build_finance(
+    conn: sqlite3.Connection,
+    rnd: random.Random,
+    dates: Sequence[_date],
+    today: _date,
+    stamp: str,
+    counts: dict[str, int],
+) -> None:
+    """3 счёта, 10 категорий, 3 бюджета и 180 транзакций в целых копейках."""
+    account_ids: dict[str, int] = {}
+    for sort, (name, kind, balance) in enumerate(DEMO_ACCOUNTS):
+        cursor = conn.execute(
+            "INSERT INTO finance_accounts (name, kind, currency, balance_start_kopecks, "
+            "archived, sort) VALUES (?, ?, 'RUB', ?, 0, ?)",
+            (name, kind, balance, sort),
+        )
+        account_ids[name] = int(cursor.lastrowid or 0)
+        counts["accounts"] += 1
+
+    category_ids: dict[str, int] = {}
+    for sort, (name, kind, color) in enumerate(DEMO_CATEGORIES):
+        cursor = conn.execute(
+            "INSERT INTO finance_categories (name, kind, color, sort, archived) "
+            "VALUES (?, ?, ?, ?, 0)",
+            (name, kind, color, sort),
+        )
+        category_ids[name] = int(cursor.lastrowid or 0)
+        counts["categories"] += 1
+
+    month = today.strftime("%Y-%m")
+    for category_name, limit in DEMO_BUDGETS:
+        conn.execute(
+            "INSERT INTO budgets (category_id, month, limit_kopecks) VALUES (?, ?, ?)",
+            (category_ids[category_name], month, limit),
+        )
+        counts["budgets"] += 1
+
+    window = list(dates[-90:]) if len(dates) > 90 else list(dates)
+    expense_categories = [name for name, kind, _ in DEMO_CATEGORIES if kind == "expense"]
+    transactions: list[tuple[str, int, str, int, int, str]] = []
+
+    # Регулярные доходы: зарплата 5-го числа, проценты 1-го числа.
+    for day in window:
+        if day.day == 5:
+            transactions.append(
+                (
+                    _ts(day, 10, 0),
+                    14500000,
+                    "income",
+                    category_ids["Зарплата"],
+                    account_ids["Карта зарплатная"],
+                    "Зарплата",
+                )
+            )
+        if day.day == 1 and day != today:
+            transactions.append(
+                (
+                    _ts(day, 9, 30),
+                    35000,
+                    "income",
+                    category_ids["Проценты по вкладу"],
+                    account_ids["Накопительный счёт"],
+                    "Проценты по вкладу",
+                )
+            )
+
+    # Пара фриланс-поступлений в окне.
+    for _ in range(2):
+        day = rnd.choice(window)
+        transactions.append(
+            (
+                _ts(day, 15, 0),
+                rnd.randrange(1500000, 4500000, 100),
+                "income",
+                category_ids["Фриланс"],
+                account_ids["Карта зарплатная"],
+                rnd.choice(("Оплата за консультацию", "Проект на подряде", "Правки к макету")),
+            )
+        )
+
+    # Расходы: пока не наберётся ровно 180 транзакций.
+    while len(transactions) < 180:
+        day = rnd.choice(window)
+        category_name = rnd.choice(expense_categories)
+        note, minimum, maximum = rnd.choice(DEMO_EXPENSE_TEMPLATES[category_name])
+        amount = rnd.randrange(minimum, maximum + 1, 100)
+        account = (
+            account_ids["Наличные"]
+            if amount < 100000
+            else account_ids["Карта зарплатная"]
+        )
+        transactions.append(
+            (
+                _ts(day, rnd.choice((8, 9, 12, 13, 17, 18, 19, 20)), rnd.choice((0, 10, 20, 30, 40, 50))),
+                amount,
+                "expense",
+                category_ids[category_name],
+                account,
+                note,
+            )
+        )
+
+    transactions.sort(key=lambda row: row[0])
+    conn.executemany(
+        "INSERT INTO transactions (ts, amount_kopecks, kind, category_id, account_id, note, "
+        "source, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [row + (DEMO_SOURCE, stamp) for row in transactions],
+    )
+    counts["transactions"] += len(transactions)
+
+
+# -- v4: рефлексия ---------------------------------------------------------
+
+
+def _build_checkins(
+    conn: sqlite3.Connection, rnd: random.Random, dates: Sequence[_date], counts: dict[str, int]
+) -> None:
+    """90 чек-инов энергии; строку пользователя на ту же дату не перезаписываем."""
+    window = list(dates[-90:]) if len(dates) > 90 else list(dates)
+    for day in window:
+        energy = rnd.choices((1, 2, 3, 4, 5), weights=(1, 2, 4, 4, 2))[0]
+        mood = rnd.choices(DEMO_CHECKIN_MOODS, weights=DEMO_CHECKIN_MOOD_WEIGHTS)[0]
+        note = rnd.choice(DEMO_CHECKIN_NOTES) if rnd.random() < 0.4 else ""
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO checkins (date, energy, mood, note, created) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (day.isoformat(), energy, mood, note, day.isoformat() + DEMO_CHECKIN_TIME + TZ_SUFFIX),
+        )
+        counts["checkins"] += int(cursor.rowcount)
+
+
+def _build_reviews(
+    conn: sqlite3.Connection, today: _date, stamp: str, counts: dict[str, int]
+) -> None:
+    """Два итога: недельный и месячный, с фактами из засеянных данных."""
+    week_start = today - timedelta(days=today.weekday())
+    month_start = today.replace(day=1)
+    month_end = (month_start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+    periods = (
+        ("week", week_start, week_start + timedelta(days=6)),
+        ("month", month_start, month_end),
+    )
+    for period, start, end in periods:
+        wins, misses, focus, care = DEMO_REVIEW_TEXTS[period]
+        facts = _review_facts(conn, start, min(end, today))
+        facts["demo"] = True
+        cursor = conn.execute(
+            "INSERT OR IGNORE INTO reviews (period, start_date, end_date, wins, misses, "
+            "focus, care, facts_json, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                period,
+                start.isoformat(),
+                end.isoformat(),
+                wins,
+                misses,
+                focus,
+                care,
+                json.dumps(facts, ensure_ascii=False, sort_keys=True),
+                stamp,
+            ),
+        )
+        counts["reviews"] += int(cursor.rowcount)
+
+
+def _review_facts(conn: sqlite3.Connection, start: _date, end: _date) -> dict[str, Any]:
+    """Факты для итога: задачи, страницы, энергия и привычки за период (§10.4)."""
+    start_s, end_s = start.isoformat(), end.isoformat()
+    tasks_total = _count(
+        conn,
+        "SELECT COUNT(*) FROM tasks WHERE status <> 'cancelled' "
+        "AND due_date IS NOT NULL AND due_date BETWEEN ? AND ?",
+        (start_s, end_s),
+    )
+    tasks_done = _count(
+        conn,
+        "SELECT COUNT(*) FROM tasks WHERE status = 'done' "
+        "AND due_date IS NOT NULL AND due_date BETWEEN ? AND ?",
+        (start_s, end_s),
+    )
+    pages_read = _count(
+        conn,
+        "SELECT COALESCE(SUM(pages_read), 0) FROM books "
+        "WHERE shelf = 'done' AND finished_at BETWEEN ? AND ?",
+        (start_s, end_s),
+    )
+    energy_avg = conn.execute(
+        "SELECT AVG(energy) FROM checkins WHERE date BETWEEN ? AND ?", (start_s, end_s)
+    ).fetchone()
+    habits = _count(conn, "SELECT COUNT(*) FROM habits")
+    marks = _count(
+        conn,
+        "SELECT COUNT(*) FROM habit_marks WHERE date BETWEEN ? AND ?",
+        (start_s, end_s),
+    )
+    days = max(1, (end - start).days + 1)
+    habits_pct = round(100.0 * marks / (habits * days)) if habits else 0
+    return {
+        "tasksDone": tasks_done,
+        "tasksTotal": tasks_total,
+        "pagesRead": pages_read,
+        "energyAvg": round(float(energy_avg[0]), 1) if energy_avg and energy_avg[0] is not None else 0.0,
+        "habitsPct": min(100, habits_pct),
+    }
 
 
 # -- курсы -----------------------------------------------------------------
@@ -783,7 +2326,8 @@ def main(argv: Iterable[str] | None = None) -> int:
     """CLI сидера: печатает, что засеяно, и возвращает код выхода."""
     parser = argparse.ArgumentParser(
         prog="python3 -m app.server.seeder",
-        description="Демо-данные Life OS v3: журнал, метрики, привычки, цели и курсы.",
+        description="Демо-данные Life OS v4: журнал, метрики, привычки, Компас, "
+        "дела, библиотека, финансы и итоги.",
     )
     parser.add_argument("--days", type=int, default=DEFAULT_DAYS, help="сколько дней сеять")
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="зерно генератора")
