@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.server.api import analytics, compass, courses, finance, health, journal, library, overview, quick, sections
+from app.server.api import analytics, analytics_summary, compass, courses, export, finance, health, journal, library, overview, personal, quick, search, sections
 from app.server.api import settings as settings_api
 
 __all__ = ["api_routers"]
@@ -26,6 +26,10 @@ def api_routers() -> tuple[APIRouter, ...]:
         library.router,
         finance.router,
         compass.router,
+        personal.router,
+        analytics_summary.router,
+        search.router,
+        export.router,
         sections.router,
         analytics.router,
         settings_api.router,
