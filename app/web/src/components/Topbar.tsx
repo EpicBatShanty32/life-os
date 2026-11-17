@@ -1,65 +1,69 @@
-import type { DataSource } from '../api/types';
-import { capitalize, formatDateLong, toLocalIso } from '../lib/format';
 import type { RouteDef } from '../lib/router';
-import { Icon, LogoMark } from './Icon';
+import { navGroupForPath } from '../nav';
+import { BrandMark } from './BrandMark';
+import { Icon } from './Icon';
+import { Button } from './ui';
 
 interface TopbarProps {
   route: RouteDef | undefined;
-  source: DataSource;
-  refreshing: boolean;
   onOpenSearch: () => void;
   onQuickEntry: () => void;
 }
 
-export function Topbar({ route, source, refreshing, onOpenSearch, onQuickEntry }: TopbarProps) {
-  const today = new Date();
+/**
+ * Верхняя полоса 56 px: хлебная крошка, поиск и одна главная кнопка
+ * (DESIGN-v4 §2). Дата, логотип и «источник данных» живут не здесь.
+ */
+export function Topbar({ route, onOpenSearch, onQuickEntry }: TopbarProps) {
+  const group = route ? navGroupForPath(route.path) : undefined;
+  const title = route?.title ?? 'Страница не найдена';
 
   return (
-    <header className="topbar">
-      <div className="topbar__left">
-        <a className="topbar__brand" href="#/" aria-label="Life OS — на главную">
-          <LogoMark size={28} />
-          <span>Life OS</span>
+    <header className="tb">
+      <div className="tb__lead">
+        <a className="tb__home" href="#/" aria-label="Life OS — на главную">
+          <BrandMark size={28} className="tb__mark" />
         </a>
-        <div className="topbar__heading">
-          <span className="topbar__crumb">Life OS</span>
-          <Icon name="chevron-right" size={13} className="topbar__sep" />
-          <span className="topbar__title">{route?.title ?? 'Страница не найдена'}</span>
-        </div>
-        <time className="topbar__date" dateTime={toLocalIso(today)}>
-          {capitalize(formatDateLong(today))}
-        </time>
+        <nav className="tb__crumb" aria-label="Хлебная крошка">
+          <a className="tb__crumb-link" href="#/">
+            Life OS
+          </a>
+          <Icon name="chevron-right" size={12} className="tb__crumb-sep" />
+          {group ? (
+            <>
+              <span className="tb__crumb-group">{group.title}</span>
+              <Icon name="chevron-right" size={12} className="tb__crumb-sep" />
+            </>
+          ) : null}
+          <span className="tb__crumb-current" aria-current="page">
+            {title}
+          </span>
+        </nav>
       </div>
 
-      <div className="topbar__actions">
-        <span
-          className={`source-chip source-chip--${source} ${refreshing ? 'is-refreshing' : ''}`}
-          title={
-            source === 'api'
-              ? 'Данные приходят с /api/overview'
-              : 'Сервер Ф4 ещё не подключён — показаны демонстрационные данные'
-          }
-        >
-          <span className="source-chip__dot" aria-hidden="true" />
-          {source === 'api' ? 'API' : 'Демо'}
-        </span>
-
+      <div className="tb__actions">
         <button
           type="button"
-          className="search-trigger"
+          className="tb__search"
           onClick={onOpenSearch}
           aria-keyshortcuts="Meta+K Control+K"
-          aria-label="Открыть поиск и команды, ⌘K"
+          aria-label="Поиск по разделам и командам, ⌘K"
+          title="Поиск и команды, ⌘K"
         >
-          <Icon name="search" size={17} />
-          <span className="search-trigger__label">Поиск и команды</span>
-          <kbd className="search-trigger__kbd">⌘K</kbd>
+          <Icon name="search" size={16} />
+          <span className="tb__search-label">Поиск</span>
+          <kbd className="tb__kbd">⌘K</kbd>
         </button>
 
-        <button type="button" className="btn btn--primary topbar__quick" onClick={onQuickEntry}>
-          <Icon name="plus" size={17} />
-          <span>Быстрая запись</span>
-        </button>
+        <Button
+          variant="primary"
+          size="sm"
+          leadingIcon="plus"
+          className="tb__quick"
+          onClick={onQuickEntry}
+        >
+          Быстрая запись
+        </Button>
       </div>
     </header>
   );

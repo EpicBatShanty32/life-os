@@ -1,4 +1,3 @@
-import { useId } from 'react';
 import type { ReactNode } from 'react';
 
 export type IconName =
@@ -386,39 +385,6 @@ export function Icon({ name, size = 20, strokeWidth = 1.7, className }: IconProp
       focusable="false"
     >
       {PATHS[name]}
-    </svg>
-  );
-}
-
-/** Логотип — три «контура» на градиенте палитры, только inline SVG. */
-export function LogoMark({ size = 34 }: { size?: number }) {
-  const rawId = useId();
-  const gradientId = `lifeos-logo-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`;
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 32 32"
-      fill="none"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <defs>
-        <linearGradient id={gradientId} x1="0" y1="0" x2="32" y2="32" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#A18BB7" />
-          <stop offset="0.55" stopColor="#B9CBE8" />
-          <stop offset="1" stopColor="#AEDEC2" />
-        </linearGradient>
-      </defs>
-      <rect width="32" height="32" rx="10" fill={`url(#${gradientId})`} />
-      <path
-        d="M9.5 22.5V13M16 22.5V8M22.5 22.5v-6"
-        stroke="#FFFFFF"
-        strokeWidth="2.6"
-        strokeLinecap="round"
-        opacity="0.95"
-      />
-      <circle cx="9.5" cy="9.6" r="2.1" fill="#FFFFFF" />
     </svg>
   );
 }

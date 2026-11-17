@@ -246,7 +246,6 @@ export function SectionPage({
     <div className="page">
       <header className="page-head">
         <div>
-          <p className="page-head__kicker">Life OS · v3</p>
           <h1 className="page-head__title">{title}</h1>
           <p className="page-head__sub">{subtitle}</p>
         </div>

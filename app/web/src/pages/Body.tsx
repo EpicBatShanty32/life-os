@@ -536,7 +536,6 @@ export function Body() {
     <div className="page">
       <header className="page-head">
         <div className="page-head__text">
-          <p className="page-head__kicker">Life OS · v3</p>
           <h1 className="page-head__title">Тело и весы</h1>
           <p className="page-head__sub">
             Вес, EMA и состав тела за {DAYS} дней. Сегодня — {formatDateLong()}.

@@ -3,7 +3,6 @@ export function NotFound() {
     <div className="page">
       <header className="page-head">
         <div className="page-head__text">
-          <p className="page-head__kicker">Life OS · v3</p>
           <h1 className="page-head__title">Страница не найдена</h1>
           <p className="page-head__sub">Такого раздела нет — возможно, ссылка устарела.</p>
         </div>

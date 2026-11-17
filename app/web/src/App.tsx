@@ -3,6 +3,8 @@ import type { ComponentType } from 'react';
 import { postQuick, useOverview } from './api/client';
 import type { QuickEntryInput } from './api/types';
 import { CommandPalette } from './components/CommandPalette';
+import { ComingSoon } from './components/ComingSoon';
+import { Icon } from './components/Icon';
 import { MobileNav } from './components/MobileNav';
 import { QuickEntryDialog } from './components/QuickEntryDialog';
 import { Sidebar } from './components/Sidebar';
@@ -27,7 +29,11 @@ import { Sleep } from './pages/Sleep';
 import { Today } from './pages/Today';
 import { Workouts } from './pages/Workouts';
 
-const STUB_PAGES: Readonly<Record<string, ComponentType>> = {
+/**
+ * Экраны, которые уже собраны. Новые страницы-модули v4 подключаются
+ * сюда отдельным шагом, поэтому маршруты и меню от них не зависят.
+ */
+const PAGE_COMPONENTS: Readonly<Record<string, ComponentType>> = {
   '/today': Today,
   '/goals': Goals,
   '/habits': Habits,
@@ -137,6 +143,8 @@ export default function App() {
 
   const focusMain = () => mainRef.current?.focus();
 
+  const Page = PAGE_COMPONENTS[path];
+
   return (
     <div className="app" data-sidebar={collapsed ? 'collapsed' : 'expanded'}>
       <button type="button" className="skip-link" onClick={focusMain}>
@@ -148,24 +156,16 @@ export default function App() {
         collapsed={collapsed}
         onToggleCollapsed={toggleCollapsed}
         badges={overview.data?.nav ?? null}
-        streakDays={overview.data?.kpis.streak.days ?? null}
         themeMode={theme.mode}
         onThemeMode={theme.setMode}
         source={overview.source}
         sync={overview.data?.sync ?? null}
         refreshing={overview.refreshing}
         onRefresh={handleRefresh}
-        onQuickEntry={openQuickEntry}
       />
 
       <div className="app__main">
-        <Topbar
-          route={route}
-          source={overview.source}
-          refreshing={overview.refreshing}
-          onOpenSearch={openPalette}
-          onQuickEntry={openQuickEntry}
-        />
+        <Topbar route={route} onOpenSearch={openPalette} onQuickEntry={openQuickEntry} />
 
         <main className="content" id="main-content" ref={mainRef} tabIndex={-1}>
           {path === '/' ? (
@@ -173,22 +173,36 @@ export default function App() {
               data={overview.data}
               source={overview.source}
               refreshing={overview.refreshing}
-              onRefresh={handleRefresh}
-              onQuickEntry={openQuickEntry}
               onAddWater={(ml) => {
                 void handleAddWater(ml);
               }}
             />
+          ) : Page ? (
+            <Page />
+          ) : route?.soon ? (
+            <ComingSoon route={route} />
           ) : (
-            (() => {
-              const Page = STUB_PAGES[path];
-              return Page ? <Page /> : <NotFound />;
-            })()
+            <NotFound />
           )}
         </main>
       </div>
 
-      <MobileNav path={path} badges={overview.data?.nav ?? null} />
+      <MobileNav
+        path={path}
+        badges={overview.data?.nav ?? null}
+        themeMode={theme.mode}
+        onThemeMode={theme.setMode}
+      />
+
+      <button
+        type="button"
+        className="fab"
+        onClick={openQuickEntry}
+        aria-label="Быстрая запись"
+        title="Быстрая запись"
+      >
+        <Icon name="plus" size={20} />
+      </button>
 
       <CommandPalette
         open={paletteOpen}

@@ -119,6 +119,21 @@ export function formatRelative(iso: string, now: Date = new Date()): string {
   return formatDateShort(date);
 }
 
+/** Короткая форма для узких мест: «3 ч назад», «12 мин назад», «только что». */
+export function formatRelativeShort(iso: string, now: Date = new Date()): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return 'давно';
+  const diffMinutes = Math.round((now.getTime() - date.getTime()) / 60000);
+  if (diffMinutes < 1) return 'только что';
+  if (diffMinutes < 60) return `${diffMinutes} мин назад`;
+  const hours = Math.round(diffMinutes / 60);
+  if (hours < 24) return `${hours} ч назад`;
+  const days = Math.round(hours / 24);
+  if (days === 1) return 'вчера';
+  if (days < 7) return `${days} дн. назад`;
+  return formatDateShort(date);
+}
+
 export function greetingForHour(hour: number): string {
   if (hour < 5) return 'Доброй ночи';
   if (hour < 12) return 'Доброе утро';

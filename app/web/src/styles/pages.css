@@ -6,7 +6,7 @@
 .page {
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: var(--sp-5);
   padding-top: 18px;
   animation: page-in 260ms var(--ease);
 }
@@ -24,18 +24,18 @@
 }
 
 .page-head__kicker {
-  margin-bottom: 7px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  letter-spacing: 0.005em;
+  margin-bottom: 4px;
+  color: var(--text-tertiary);
+  font-size: var(--text-caption-size);
+  font-weight: 500;
+  line-height: var(--text-caption-line);
 }
 
 .page-head__title {
-  font-size: clamp(26px, 2.2vw, 34px);
-  font-weight: 650;
-  letter-spacing: -0.03em;
-  line-height: 1.1;
+  font-size: var(--text-screen-size);
+  font-weight: 600;
+  letter-spacing: var(--tracking-screen);
+  line-height: var(--text-screen-line);
 }
 
 .page-head__title--hero {

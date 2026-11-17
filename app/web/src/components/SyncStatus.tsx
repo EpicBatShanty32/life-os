@@ -1,5 +1,4 @@
-import { Icon } from './Icon';
-import { formatRelative } from '../lib/format';
+import { formatRelativeShort } from '../lib/format';
 import type { DataSource, SyncStatus as SyncStatusModel } from '../api/types';
 
 interface SyncStatusProps {
@@ -10,47 +9,43 @@ interface SyncStatusProps {
   onRefresh: () => void;
 }
 
+/**
+ * Тихий статус синхронизации (DESIGN-v4 §2): точка 6 px и одна строка
+ * 12 px без рамки и фона. Ошибка — цветом и тултипом, не плашкой.
+ */
 export function SyncStatus({ source, sync, collapsed, refreshing, onRefresh }: SyncStatusProps) {
   const isDemo = source === 'mock';
-  const state = refreshing ? 'syncing' : sync?.state ?? 'syncing';
+  const state = refreshing ? 'syncing' : (sync?.state ?? 'syncing');
   const label = isDemo
     ? 'Демо-данные'
     : state === 'error'
-      ? 'Нет связи с API'
+      ? 'Нет связи'
       : state === 'syncing'
-        ? 'Синхронизация…'
+        ? 'Синхронизация'
         : 'Синхронизировано';
-  const detail = isDemo
-    ? 'локальный мок'
-    : sync
-      ? formatRelative(sync.at)
-      : 'ожидание';
+  const detail = isDemo ? 'локальный пример' : sync ? formatRelativeShort(sync.at) : 'ожидание';
+  const tone = isDemo ? 'demo' : state;
+  const title = `${label} · ${detail}`;
 
   return (
     <button
       type="button"
-      className={`sync sync--${isDemo ? 'demo' : state}`}
+      className={collapsed ? 'sb-sync sb-sync--dot' : 'sb-sync'}
+      data-tone={tone}
       onClick={onRefresh}
       disabled={refreshing}
       aria-label={`${label}, ${detail}. Обновить данные`}
-      title={collapsed ? `${label} · ${detail}` : undefined}
+      title={title}
     >
-      <span
-        className={`sync__dot ${refreshing ? 'sync__dot--pulse' : ''}`}
-        aria-hidden="true"
-      />
-      {!collapsed && (
-        <>
-          <span className="sync__text">
-            <span className="sync__label">{label}</span>
-            <span className="sync__time">{detail}</span>
+      <span className="sb-sync__dot" aria-hidden="true" />
+      {collapsed ? null : (
+        <span className="sb-sync__label">
+          {label}
+          <span className="sb-sync__sep" aria-hidden="true">
+            {' · '}
           </span>
-          <Icon
-            name="sync"
-            size={15}
-            className={`sync__refresh ${refreshing ? 'is-spinning' : ''}`}
-          />
-        </>
+          <span className="sb-sync__time">{detail}</span>
+        </span>
       )}
     </button>
   );

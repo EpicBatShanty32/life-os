@@ -26,6 +26,10 @@ import type { IconName } from './Icon';
    Только токены и var(--…); никаких hex и «магических» цветов.
    ───────────────────────────────────────────────────────────── */
 
+// Экран-модули импортируют иконку из общего набора примитивов.
+export { Icon };
+export type { IconName };
+
 function cx(...values: ReadonlyArray<string | false | null | undefined>): string {
   return values.filter(Boolean).join(' ');
 }

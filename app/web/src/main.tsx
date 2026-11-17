@@ -6,6 +6,7 @@ import './styles/base.css';
 import './styles/ui.css';
 import './styles/layout.css';
 import './styles/pages.css';
+import './styles/overview.css';
 
 const container = document.getElementById('root');
 

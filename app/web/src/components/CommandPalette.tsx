@@ -5,7 +5,7 @@ import type { NavBadges } from '../api/types';
 import { trapFocus } from '../lib/focus';
 import type { ThemeMode } from '../lib/theme';
 import { THEME_LABELS } from '../lib/theme';
-import { HOME_ITEM, NAV_GROUPS, SETTINGS_ITEM } from '../nav';
+import { NAV_GROUPS, SETTINGS_ITEM, TOP_LEVEL_ITEMS } from '../nav';
 import type { NavItem } from '../nav';
 import { Icon } from './Icon';
 import type { IconName } from './Icon';
@@ -80,8 +80,8 @@ export function CommandPalette({
     const q = normalizeQuery(query);
     const common: PaletteSection = {
       id: 'common',
-      title: 'Общее',
-      entries: [navEntry(HOME_ITEM), navEntry(SETTINGS_ITEM)],
+      title: 'Разделы',
+      entries: [...TOP_LEVEL_ITEMS.map(navEntry), navEntry(SETTINGS_ITEM)],
     };
     const groups: PaletteSection[] = NAV_GROUPS.map((group) => ({
       id: group.id,
@@ -101,7 +101,7 @@ export function CommandPalette({
         },
         {
           label: 'Добавить воду +250 мл',
-          hint: 'В виджет воды на Обзоре',
+          hint: 'В пульсе воды на Обзоре',
           icon: 'droplet',
           keywords: 'вода выпить стакан миллилитры',
           action: onAddWater,
@@ -115,7 +115,7 @@ export function CommandPalette({
         },
         {
           label: 'Свернуть или развернуть меню',
-          hint: 'Ширина 260 ↔ 68 px',
+          hint: 'Ширина 248 ↔ 64 px',
           icon: 'chevron-left',
           keywords: 'сайдбар меню свернуть развернуть',
           action: onToggleSidebar,

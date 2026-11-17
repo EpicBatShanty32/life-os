@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react';
 import type { FocusEvent, MouseEvent } from 'react';
 import type { DataSource, NavBadges, SyncStatus as SyncStatusModel } from '../api/types';
 import type { ThemeMode } from '../lib/theme';
-import { pluralRu } from '../lib/format';
-import { HOME_ITEM, NAV_GROUPS, SETTINGS_ITEM } from '../nav';
+import { SIDEBAR_NAV, SETTINGS_ITEM } from '../nav';
 import type { NavItem } from '../nav';
-import { Icon, LogoMark } from './Icon';
+import { BrandMark } from './BrandMark';
+import { Icon } from './Icon';
 import { SyncStatus } from './SyncStatus';
 import { ThemeSwitch } from './ThemeSwitch';
 
@@ -14,14 +14,12 @@ interface SidebarProps {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   badges: NavBadges | null;
-  streakDays: number | null;
   themeMode: ThemeMode;
   onThemeMode: (mode: ThemeMode) => void;
   source: DataSource;
   sync: SyncStatusModel | null;
   refreshing: boolean;
   onRefresh: () => void;
-  onQuickEntry: () => void;
 }
 
 interface TipState {
@@ -29,19 +27,22 @@ interface TipState {
   top: number;
 }
 
+function isActivePath(path: string, item: NavItem): boolean {
+  if (item.path === '/') return path === '/';
+  return path === item.path || path.startsWith(`${item.path}/`);
+}
+
 export function Sidebar({
   path,
   collapsed,
   onToggleCollapsed,
   badges,
-  streakDays,
   themeMode,
   onThemeMode,
   source,
   sync,
   refreshing,
   onRefresh,
-  onQuickEntry,
 }: SidebarProps) {
   const [tip, setTip] = useState<TipState | null>(null);
 
@@ -58,122 +59,96 @@ export function Sidebar({
 
   const hideTip = () => setTip(null);
 
-  const renderLink = (item: NavItem, extraClass = '') => {
-    const active = path === item.path;
-    const badge = item.badge && badges ? badges[item.badge] : 0;
-    const ariaLabel = collapsed
-      ? `${item.label}${badge > 0 ? `, ${badge}` : ''}`
-      : undefined;
+  const renderLink = (item: NavItem) => {
+    const active = isActivePath(path, item);
+    const count = item.badge && badges ? badges[item.badge] : 0;
+    const label = count > 0 ? `${item.label}, ${count}` : item.label;
 
     return (
       <a
         key={item.path}
         href={`#${item.path}`}
-        className={`nav-item ${active ? 'is-active' : ''} ${extraClass}`}
+        className="sb-row"
+        data-active={active ? 'true' : undefined}
         aria-current={active ? 'page' : undefined}
-        aria-label={ariaLabel}
-        onMouseEnter={showTip(item.label)}
+        aria-label={collapsed ? label : undefined}
+        onMouseEnter={showTip(label)}
         onMouseLeave={hideTip}
-        onFocus={showTip(item.label)}
+        onFocus={showTip(label)}
         onBlur={hideTip}
         onClick={hideTip}
       >
-        <span className="nav-item__icon">
-          <Icon name={item.icon} size={19} />
+        <span className="sb-row__icon">
+          <Icon name={item.icon} size={18} />
         </span>
-        <span className="nav-item__label">{item.label}</span>
-        {badge > 0 ? (
-          <span className="nav-item__badge" aria-hidden="true">
-            {badge}
+        <span className="sb-row__label">{item.label}</span>
+        {count > 0 ? (
+          <span className="sb-row__badge" aria-hidden="true">
+            {count}
           </span>
         ) : null}
+        {count > 0 ? <span className="sb-row__dot" aria-hidden="true" /> : null}
       </a>
     );
   };
 
-  const streakText =
-    streakDays === null
-      ? 'Серия'
-      : `${streakDays} ${pluralRu(streakDays, ['день', 'дня', 'дней'])}`;
-
   return (
-    <aside className="sidebar" aria-label="Основная навигация">
-      <div className="sidebar__head">
+    <aside className="sb" aria-label="Основная навигация">
+      <div className="sb__head">
         <a
-          className="brand"
+          className="sb__brand"
           href="#/"
           aria-label="Life OS — на главную"
           onMouseEnter={showTip('Life OS — на главную')}
           onMouseLeave={hideTip}
+          onFocus={showTip('Life OS — на главную')}
+          onBlur={hideTip}
           onClick={hideTip}
         >
-          <LogoMark size={34} />
-          <span className="brand__text">
-            <span className="brand__title">Life OS</span>
-            <span className="brand__sub">v3 · личный контур</span>
+          <BrandMark size={30} className="sb__mark" />
+          <span className="sb__brand-text">
+            <span className="sb__brand-title">Life OS</span>
+            <span className="sb__brand-sub">личный контур</span>
           </span>
         </a>
         <button
           type="button"
-          className="icon-btn sidebar__collapse"
+          className="sb__collapse"
           onClick={onToggleCollapsed}
           aria-label={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
           aria-expanded={!collapsed}
-          aria-controls="sidebar-nav"
+          aria-controls="app-nav"
           title={collapsed ? 'Развернуть меню' : 'Свернуть меню'}
+          onMouseEnter={showTip(collapsed ? 'Развернуть меню' : 'Свернуть меню')}
+          onMouseLeave={hideTip}
+          onFocus={showTip(collapsed ? 'Развернуть меню' : 'Свернуть меню')}
+          onBlur={hideTip}
         >
-          <Icon name={collapsed ? 'chevron-right' : 'chevron-left'} size={18} />
+          <Icon name={collapsed ? 'chevron-right' : 'chevron-left'} size={16} />
         </button>
       </div>
 
-      <div
-        className="streak"
-        title={collapsed ? `${streakText} · серия без пропусков` : undefined}
-        aria-label={streakDays === null ? 'Серия' : `Серия: ${streakText}`}
-      >
-        <span className="streak__icon" aria-hidden="true">
-          <Icon name="flame" size={18} />
-          <span className="streak__count">{streakDays ?? '—'}</span>
-        </span>
-        <span className="streak__text">
-          <strong>{streakText}</strong>
-          <span>серия без пропусков</span>
-        </span>
-      </div>
-
-      <button
-        type="button"
-        className="quick-add"
-        onClick={onQuickEntry}
-        aria-label="Быстрая запись"
-        title={collapsed ? 'Быстрая запись' : undefined}
-      >
-        <span className="quick-add__icon">
-          <Icon name="plus" size={18} />
-        </span>
-        <span className="quick-add__label">Быстрая запись</span>
-      </button>
-
-      <nav
-        id="sidebar-nav"
-        className="sidebar__nav"
-        aria-label="Разделы Life OS"
-        onScroll={hideTip}
-      >
-        {renderLink(HOME_ITEM, 'nav-item--home')}
-
-        {NAV_GROUPS.map((group) => (
-          <section className="nav-group" key={group.id} aria-labelledby={`nav-group-${group.id}`}>
-            <h2 className="nav-group__title" id={`nav-group-${group.id}`}>
-              {group.title}
-            </h2>
-            <div className="nav-group__rule" aria-hidden="true" />
-            {group.items.map((item) => renderLink(item))}
-          </section>
-        ))}
+      <nav id="app-nav" className="sb__nav" aria-label="Разделы" onScroll={hideTip}>
+        {SIDEBAR_NAV.map((node) => {
+          if (node.kind === 'item') return renderLink(node.item);
+          const { group } = node;
+          const labelId = `sb-group-${group.id}`;
+          return (
+            <section className="sb-group" key={group.id} aria-labelledby={labelId}>
+              <p
+                className={collapsed ? 'visually-hidden' : 'sb-group__label'}
+                id={labelId}
+              >
+                {group.title}
+              </p>
+              {collapsed ? <span className="sb-group__rule" aria-hidden="true" /> : null}
+              {group.items.map((item) => renderLink(item))}
+            </section>
+          );
+        })}
       </nav>
 
-      <div className="sidebar__foot">
+      <div className="sb__foot">
         <SyncStatus
           source={source}
           sync={sync}
@@ -181,21 +156,12 @@ export function Sidebar({
           refreshing={refreshing}
           onRefresh={onRefresh}
         />
-
-        <div className="sidebar__divider" aria-hidden="true" />
-
-        <div className="theme-block">
-          {!collapsed ? <span className="sidebar__foot-label">Тема</span> : null}
-          <ThemeSwitch mode={themeMode} collapsed={collapsed} onSelect={onThemeMode} />
-        </div>
-
-        {renderLink(SETTINGS_ITEM, 'nav-item--settings')}
-
-        {!collapsed ? <p className="sidebar__version">Life OS v3 · сборка Ф5</p> : null}
+        <ThemeSwitch mode={themeMode} collapsed={collapsed} onSelect={onThemeMode} />
+        {renderLink(SETTINGS_ITEM)}
       </div>
 
       {tip ? (
-        <div className="sidebar-tip" role="tooltip" style={{ top: tip.top }} aria-hidden="true">
+        <div className="sb-tip" role="tooltip" style={{ top: tip.top }}>
           {tip.label}
         </div>
       ) : null}

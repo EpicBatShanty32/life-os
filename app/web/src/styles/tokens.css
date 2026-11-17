@@ -16,8 +16,10 @@
   --surface-muted: #efede7; /* чипы, инертные кнопки */
   --surface-sunken: #e8e5dd; /* нажатие/углубление, доп. к muted */
   --text: #1b1a17;
-  --text-secondary: #6e6a63;
-  --text-tertiary: #a39e95;
+  /* secondary/tertiary подняты до AA (≥4.5:1) на всех поверхностях:
+     DESIGN-v4 §5 «контраст текста ≥ 4.5:1» важнее точного hex из §1. */
+  --text-secondary: #55514b;
+  --text-tertiary: #68645c;
   --text-inverse: #ffffff;
   --border: rgba(27, 26, 23, 0.09);
   --border-strong: rgba(27, 26, 23, 0.18);
@@ -150,8 +152,8 @@
   --surface-muted: #262624;
   --surface-sunken: #2b2b28;
   --text: #edebe5;
-  --text-secondary: #a7a29a;
-  --text-tertiary: #7a766f;
+  --text-secondary: #b7b2a9;
+  --text-tertiary: #9a958c;
   --text-inverse: #121211;
   --border: rgba(255, 255, 255, 0.09);
   --border-strong: rgba(255, 255, 255, 0.17);

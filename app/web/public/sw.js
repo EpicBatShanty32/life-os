@@ -1,10 +1,18 @@
-/* Service worker Life OS v3.
+/* Service worker Life OS v4.
    Правило простое: оболочка — всегда сначала из сети (иначе после деплоя
    браузер держит старый index.html и ссылается на удалённые файлы сборки),
    хешированные ассеты — из кеша, API — только из сети. */
 
-const VERSION = 'lifeos-v3-3';
-const SHELL = ['./offline.html', './manifest.webmanifest', './icon-192.png', './icon-512.png'];
+const VERSION = 'lifeos-v4-1';
+const SHELL = [
+  './offline.html',
+  './manifest.webmanifest',
+  './favicon-32.png',
+  './apple-touch-icon-180.png',
+  './logo-256.png',
+  './icon-192.png',
+  './icon-512.png',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

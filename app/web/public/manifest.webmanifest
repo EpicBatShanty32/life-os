@@ -1,16 +1,16 @@
 {
   "name": "Life OS",
   "short_name": "Life OS",
-  "description": "Дневник, сон, тренировки и курсы в одном экране",
+  "description": "Личный контур: компас, дела, тело, знания и деньги в одном дне",
   "lang": "ru",
   "dir": "ltr",
-  "start_url": "./#/today",
+  "start_url": "./#/",
   "scope": "./",
   "display": "standalone",
   "display_override": ["standalone", "minimal-ui"],
   "orientation": "any",
-  "background_color": "#F6F7FB",
-  "theme_color": "#F6F7FB",
+  "background_color": "#F5F4F1",
+  "theme_color": "#F5F4F1",
   "categories": ["health", "lifestyle", "productivity"],
   "icons": [
     { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
@@ -19,7 +19,7 @@
   ],
   "shortcuts": [
     { "name": "Сегодня", "url": "./#/today", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
-    { "name": "Журнал", "url": "./#/journal", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
-    { "name": "Курсы", "url": "./#/courses", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] }
+    { "name": "Компас", "url": "./#/compass", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] },
+    { "name": "Инбокс", "url": "./#/inbox", "icons": [{ "src": "icon-192.png", "sizes": "192x192" }] }
   ]
 }

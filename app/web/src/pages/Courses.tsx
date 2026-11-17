@@ -162,7 +162,6 @@ export function Courses() {
       <div className="page">
         <header className="page-head">
           <div>
-            <p className="page-head__kicker">Life OS · v3</p>
             <h1 className="page-head__title">{detail.lesson.title}</h1>
             <p className="page-head__sub">
               Урок {detail.lesson.idx}
@@ -311,7 +310,6 @@ export function Courses() {
       <div className="page">
         <header className="page-head">
           <div>
-            <p className="page-head__kicker">Life OS · v3</p>
             <h1 className="page-head__title">{course.course.title}</h1>
             <p className="page-head__sub">
               {course.course.lessons_done} из {course.course.lessons_total} уроков пройдено
@@ -350,7 +348,6 @@ export function Courses() {
     <div className="page">
       <header className="page-head">
         <div>
-          <p className="page-head__kicker">Life OS · v3</p>
           <h1 className="page-head__title">Курсы</h1>
           <p className="page-head__sub">Видео и аудио с таймкодами, конспектами и прогрессом.</p>
         </div>
