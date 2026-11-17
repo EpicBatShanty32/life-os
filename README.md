@@ -495,7 +495,7 @@ React-SPA и Telegram-бот на aiogram. Оно не мешает устано
 - Подробности запуска — [`app/README.md`](app/README.md).
 - Демо-данные: `python3 -m app.server.seeder --db data/lifeos-v3.db --days 120`.
 - Сервер: `python3 -m uvicorn app.server.main:app --port 8787`, SPA — на `/`.
-- Тесты ядра: `python3 -m pytest app/tests -q` (225 штук).
+- Тесты ядра: `python3 -m pytest app/tests -q` (240 штук).
 
 ## Где что лежит
 

@@ -41,6 +41,7 @@ KIND_LABELS = {
     "workout": "Тренировка",
     "journal": "Дневник",
     "note": "Заметка",
+    "thought": "Мысль",
     "mood": "Настроение",
     "sleep": "Сон",
     "energy": "Энергия",
@@ -56,7 +57,7 @@ SECTIONS: dict[str, dict[str, Any]] = {
     "journal": {
         "title": "Журнал",
         "note": "Записи, поиск по тексту и экспорт в Obsidian.",
-        "entries": ("journal", "note"),
+        "entries": ("journal", "note", "thought"),
         "metrics": (),
     },
     "analytics": {
@@ -110,7 +111,7 @@ SECTIONS: dict[str, dict[str, Any]] = {
     "today": {
         "title": "Сегодня",
         "note": "Один экран на день: что уже сделано и что дальше.",
-        "entries": ("journal", "food", "workout", "water", "note"),
+        "entries": ("journal", "thought", "food", "workout", "water", "note"),
         "metrics": ("sleep", "mood", "water", "weight"),
     },
     "settings": {

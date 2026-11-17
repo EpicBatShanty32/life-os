@@ -10,7 +10,7 @@ app/
   web/        SPA: React 19 + TypeScript + Vite, без внешних UI-библиотек
   bot/        Telegram-бот (aiogram): приём текста и медиа
   worker/     Очередь задач: транскрибация, сегменты, конспекты
-  tests/      pytest: 225 тестов на момент 0.3.0-alpha
+  tests/      pytest: 240 тестов на момент 0.3.0-alpha
   qa_report/  скриншоты и отчёт приёмки
 ```
 
