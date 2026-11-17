@@ -102,7 +102,7 @@ def _create_course(connection: sqlite3.Connection, title: str = "Здоровь�
 
 
 def test_schema_version_and_tables(conn: sqlite3.Connection) -> None:
-    assert SCHEMA_VERSION == 2
+    assert SCHEMA_VERSION == 3
     assert user_version(conn) == SCHEMA_VERSION
 
     tables = _table_names(conn)

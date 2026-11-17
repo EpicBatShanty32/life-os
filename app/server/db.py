@@ -1,8 +1,14 @@
 """SQLite-слой Life OS v3: подключение, схема, миграции, FTS5-поиск.
 
 Схема версионируется через ``PRAGMA user_version``; текущая версия —
-:data:`SCHEMA_VERSION`. :func:`migrate` идемпотентна: повторный вызов на
+:data:`SCHEMA_VERSION` (= 3). :func:`migrate` идемпотентна: повторный вызов на
 актуальной базе ничего не делает и не дублирует данные.
+
+Миграция 3 — схема v4 из ``studio/HANDOFF-OPUS-5.5.md`` §11: сферы, проекты,
+задачи, инбокс, библиотека, финансы, чек-ины и итоги плюс новые колонки в
+``goals``/``courses``/``habits``. Она только добавляет объекты (``CREATE ...
+IF NOT EXISTS`` и проверяемый ``ALTER TABLE ADD COLUMN``), поэтому база v2
+переезжает без потери данных.
 
 Что важно знать о схеме:
 
@@ -54,11 +60,12 @@ __all__ = [
     "user_version",
 ]
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 BUSY_TIMEOUT_MS = 5000
 
-#: Таблицы схемы v3 (без FTS-индексов).
+#: Таблицы схемы (без FTS-индексов): база v3 и новые сущности v4 из миграции 3.
 TABLES: tuple[str, ...] = (
+    # миграция 1
     "entries",
     "metrics",
     "habits",
@@ -72,6 +79,25 @@ TABLES: tuple[str, ...] = (
     "notes",
     "jobs",
     "settings_kv",
+    # миграция 3 — схема v4 (§11)
+    "spheres",
+    "goal_steps",
+    "anti_goals",
+    "projects",
+    "project_steps",
+    "project_notes",
+    "tasks",
+    "inbox_items",
+    "books",
+    "book_insights",
+    "book_quotes",
+    "book_actions",
+    "finance_accounts",
+    "finance_categories",
+    "transactions",
+    "budgets",
+    "checkins",
+    "reviews",
 )
 
 #: Виртуальные FTS5-таблицы.
@@ -307,10 +333,293 @@ def _migration_2_jobs_meta(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE jobs ADD COLUMN meta_json TEXT NOT NULL DEFAULT '{}'")
 
 
+# --------------------------------------------------------------------------
+# DDL: миграция 3 — схема v4 (сферы, проекты, задачи, библиотека, финансы,
+# рефлексия). Источник — studio/HANDOFF-OPUS-5.5.md §11.
+# --------------------------------------------------------------------------
+
+_MIGRATION_3_DDL: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS spheres (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE,
+        color TEXT NOT NULL DEFAULT '#A18BB7',
+        icon TEXT NOT NULL DEFAULT '',
+        sort INTEGER NOT NULL DEFAULT 0,
+        archived INTEGER NOT NULL DEFAULT 0,
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS goal_steps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        goal_id INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        done INTEGER NOT NULL DEFAULT 0,
+        due TEXT,
+        sort INTEGER NOT NULL DEFAULT 0,
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS anti_goals (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        period TEXT NOT NULL CHECK (period IN ('month', 'quarter')),
+        text TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS projects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        sphere_id INTEGER REFERENCES spheres(id) ON DELETE SET NULL,
+        goal_id INTEGER REFERENCES goals(id) ON DELETE SET NULL,
+        deadline TEXT,
+        status TEXT NOT NULL DEFAULT 'idea'
+            CHECK (status IN ('idea', 'active', 'paused', 'done')),
+        outcome TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS project_steps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        title TEXT NOT NULL,
+        done INTEGER NOT NULL DEFAULT 0,
+        sort INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS project_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL DEFAULT 'note' CHECK (kind IN ('note', 'link')),
+        title TEXT NOT NULL DEFAULT '',
+        body TEXT NOT NULL DEFAULT '',
+        url TEXT NOT NULL DEFAULT '',
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS tasks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        sphere_id INTEGER REFERENCES spheres(id) ON DELETE SET NULL,
+        project_id INTEGER REFERENCES projects(id) ON DELETE SET NULL,
+        goal_id INTEGER REFERENCES goals(id) ON DELETE SET NULL,
+        list_kind TEXT NOT NULL DEFAULT 'work' CHECK (list_kind IN ('work', 'personal')),
+        tags TEXT NOT NULL DEFAULT '',
+        due_date TEXT,
+        start_at TEXT,
+        end_at TEXT,
+        resource TEXT NOT NULL DEFAULT 'important'
+            CHECK (resource IN ('must', 'important', 'low')),
+        status TEXT NOT NULL DEFAULT 'todo' CHECK (status IN ('todo', 'done', 'cancelled')),
+        recurrence TEXT NOT NULL DEFAULT '',
+        notes TEXT NOT NULL DEFAULT '',
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        done_at TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS inbox_items (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        text TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new', 'processed')),
+        converted_type TEXT NOT NULL DEFAULT '',
+        converted_id INTEGER,
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS books (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL,
+        author TEXT NOT NULL DEFAULT '',
+        category TEXT NOT NULL DEFAULT 'nonfiction'
+            CHECK (category IN ('pro', 'fiction', 'nonfiction')),
+        pages_total INTEGER NOT NULL DEFAULT 0,
+        pages_read INTEGER NOT NULL DEFAULT 0,
+        shelf TEXT NOT NULL DEFAULT 'queue'
+            CHECK (shelf IN ('reading', 'queue', 'done', 'dropped')),
+        rating INTEGER,
+        why TEXT NOT NULL DEFAULT '',
+        priority INTEGER NOT NULL DEFAULT 0,
+        finished_at TEXT,
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        updated TEXT
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS book_insights (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        sort INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS book_quotes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        page INTEGER,
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS book_actions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        book_id INTEGER NOT NULL REFERENCES books(id) ON DELETE CASCADE,
+        text TEXT NOT NULL,
+        task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS finance_accounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL DEFAULT 'card'
+            CHECK (kind IN ('cash', 'card', 'savings', 'broker')),
+        currency TEXT NOT NULL DEFAULT 'RUB',
+        balance_start_kopecks INTEGER NOT NULL DEFAULT 0,
+        archived INTEGER NOT NULL DEFAULT 0,
+        sort INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS finance_categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('income', 'expense')),
+        color TEXT NOT NULL DEFAULT '#A18BB7',
+        sort INTEGER NOT NULL DEFAULT 0,
+        archived INTEGER NOT NULL DEFAULT 0,
+        UNIQUE (name, kind)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS transactions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,
+        amount_kopecks INTEGER NOT NULL CHECK (amount_kopecks > 0),
+        kind TEXT NOT NULL CHECK (kind IN ('income', 'expense')),
+        category_id INTEGER REFERENCES finance_categories(id) ON DELETE SET NULL,
+        account_id INTEGER REFERENCES finance_accounts(id) ON DELETE SET NULL,
+        note TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT 'manual',
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS budgets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category_id INTEGER NOT NULL REFERENCES finance_categories(id) ON DELETE CASCADE,
+        month TEXT NOT NULL,
+        limit_kopecks INTEGER NOT NULL,
+        UNIQUE (category_id, month)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS checkins (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL UNIQUE,
+        energy INTEGER NOT NULL CHECK (energy BETWEEN 1 AND 5),
+        mood TEXT NOT NULL DEFAULT '',
+        note TEXT NOT NULL DEFAULT '',
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        period TEXT NOT NULL CHECK (period IN ('week', 'month')),
+        start_date TEXT NOT NULL,
+        end_date TEXT NOT NULL,
+        wins TEXT NOT NULL DEFAULT '',
+        misses TEXT NOT NULL DEFAULT '',
+        focus TEXT NOT NULL DEFAULT '',
+        care TEXT NOT NULL DEFAULT '',
+        facts_json TEXT NOT NULL DEFAULT '{}',
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        UNIQUE (period, start_date)
+    )
+    """,
+    # Индексы из §11: обязательны, поиск идёт через LIKE по индексированным
+    # полям (FTS для новых сущностей намеренно не расширяем).
+    "CREATE INDEX IF NOT EXISTS idx_tasks_due_status ON tasks(due_date, status)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_sphere ON tasks(sphere_id)",
+    "CREATE INDEX IF NOT EXISTS idx_tasks_list_kind ON tasks(list_kind)",
+    "CREATE INDEX IF NOT EXISTS idx_transactions_ts ON transactions(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_transactions_category ON transactions(category_id)",
+    "CREATE INDEX IF NOT EXISTS idx_goal_steps_goal ON goal_steps(goal_id)",
+    "CREATE INDEX IF NOT EXISTS idx_project_steps_project ON project_steps(project_id)",
+    "CREATE INDEX IF NOT EXISTS idx_books_shelf ON books(shelf)",
+    "CREATE INDEX IF NOT EXISTS idx_inbox_status ON inbox_items(status)",
+    "CREATE INDEX IF NOT EXISTS idx_checkins_date ON checkins(date)",
+    "CREATE INDEX IF NOT EXISTS idx_reviews_period_start ON reviews(period, start_date)",
+)
+
+#: Новые колонки v4 в таблицах, созданных миграциями 1–2:
+#: ``(таблица, колонка, DDL-хвост)``. Добавляются только если колонки ещё нет.
+_MIGRATION_3_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("goals", "sphere_id", "INTEGER REFERENCES spheres(id)"),
+    ("goals", "horizon", "TEXT NOT NULL DEFAULT 'year'"),
+    ("goals", "parent_id", "INTEGER REFERENCES goals(id) ON DELETE SET NULL"),
+    ("goals", "why", "TEXT NOT NULL DEFAULT ''"),
+    ("goals", "progress", "INTEGER NOT NULL DEFAULT 0"),
+    ("courses", "organizer", "TEXT NOT NULL DEFAULT ''"),
+    ("courses", "deadline", "TEXT"),
+    ("courses", "notes", "TEXT NOT NULL DEFAULT ''"),
+    ("courses", "project_id", "INTEGER REFERENCES projects(id) ON DELETE SET NULL"),
+    ("courses", "goal_id", "INTEGER REFERENCES goals(id) ON DELETE SET NULL"),
+    ("habits", "sphere_id", "INTEGER REFERENCES spheres(id) ON DELETE SET NULL"),
+    ("habits", "color", "TEXT NOT NULL DEFAULT '#A18BB7'"),
+)
+
+
+def _add_column_if_missing(
+    conn: sqlite3.Connection, table: str, column: str, ddl: str
+) -> None:
+    """``ALTER TABLE ... ADD COLUMN``, только если колонки ещё нет.
+
+    SQLite не умеет ``ADD COLUMN IF NOT EXISTS``; проверка через
+    ``PRAGMA table_info`` делает миграцию идемпотентной даже на базе,
+    где часть колонок уже появилась (например, после ручного ремонта).
+    """
+    columns = {
+        str(info[1]) for info in conn.execute("PRAGMA table_info(%s)" % table).fetchall()
+    }
+    if column not in columns:
+        conn.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, column, ddl))
+
+
+def _migration_3_v4_schema(conn: sqlite3.Connection) -> None:
+    """v3: схема v4 — сферы, проекты, задачи, библиотека, финансы, рефлексия.
+
+    Создаёт новые таблицы и индексы (``CREATE ... IF NOT EXISTS``), затем
+    аккуратно добавляет колонки в ``goals``/``courses``/``habits``. Порядок
+    важен для FK: ``spheres`` раньше ``goals``/``projects``/``tasks``,
+    ``tasks`` раньше ``book_actions``, ``projects`` раньше ``courses``.
+    """
+    for statement in _MIGRATION_3_DDL:
+        conn.execute(statement)
+    for table, column, ddl in _MIGRATION_3_COLUMNS:
+        _add_column_if_missing(conn, table, column, ddl)
+
+
 #: Применённые миграции: версия -> SQL-инструкции или функция-миграция.
 MIGRATIONS: Mapping[int, tuple[str, ...] | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_1,
     2: _migration_2_jobs_meta,
+    3: _migration_3_v4_schema,
 }
 
 
