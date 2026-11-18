@@ -495,7 +495,13 @@ class BotService:
             logger.exception("агент упал — разбираю фразу правилами")
             return None
         if result is None:
+            logger.warning("агент не ответил — разбираю фразу правилами")
             return None
+        logger.info(
+            "агент ответил за %.1f c, инструменты: %s",
+            result.latency_ms / 1000.0,
+            ", ".join(result.tools_used()) or "без инструментов",
+        )
         self.record_usage(
             "agent",
             "message",
