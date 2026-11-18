@@ -45,6 +45,7 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
+from app.bot import agent as agent_module
 from app.bot import intent, intent_v4, media, media_store, nutrition_v4, points_v4, reminders, store_v4
 from app.server import db, jobs, usage
 from app.server import transcribe as transcribe_module
@@ -156,11 +157,15 @@ class BotService:
         transcriber: Optional[Any] = None,
         media_root: Optional[Path] = None,
         v4_router: Optional[Any] = None,
+        agent: Optional[Any] = None,
     ) -> None:
         self.settings = settings
         self.conn = conn
         self.intent_router = intent_router or intent.build_router(settings)
         self.v4_router = v4_router or intent_v4.build_router(settings)
+        #: Автономный агент (модель с инструментами). ``None`` — работаем
+        #: прежним разбором: бот не должен зависеть от наличия ключа.
+        self.agent = agent
         #: Шлюз для оценки КБЖУ продуктов, которых нет в справочнике.
         self.food_gateway = getattr(self.v4_router, "gateway", None)
         #: Модель-формулировщик ответов по готовым числам (может отсутствовать).
@@ -392,6 +397,32 @@ class BotService:
         self.record_usage("reminders", "unmute")
         return Reply(text)
 
+    def handle_undo(self) -> Reply:
+        """``/undo``: откат последнего действия агента, затем старой записи."""
+        try:
+            with self._db_lock:
+                removed, label = agent_module.undo_last(self.conn)
+        except Exception:
+            logger.exception("не удалось откатить последнее действие")
+            removed, label = False, ""
+        if removed:
+            self.record_usage("undo", "agent")
+            return Reply("Отменил: %s." % label)
+        try:
+            with self._db_lock:
+                record = store_v4.last_record(self.conn)
+                if record:
+                    removed, label = store_v4.delete_record(self.conn, record)
+                    if removed:
+                        store_v4.clear_last(self.conn)
+        except Exception:
+            logger.exception("не удалось откатить последнюю запись")
+            removed, label = False, ""
+        if removed:
+            self.record_usage("undo", "record")
+            return Reply("Отменил: %s." % label)
+        return Reply("Отменять нечего — журнал пуст.")
+
     def handle_reminders(self, text: str = "") -> Reply:
         """``/reminders`` — расписание; ``/reminders morning 08:30`` — правка."""
         argument = ""
@@ -447,6 +478,35 @@ class BotService:
 
         return self._understand(clean, chat_id, message_id)
 
+    def _agent_reply(self, clean: str) -> Optional[Reply]:
+        """Первая попытка — агент с инструментами; ``None`` — решают правила.
+
+        Любой сбой (нет ключа, сеть, пустой ответ модели) тихо возвращает
+        ``None``: человек получит ответ старого разбора, а не ошибку.
+        """
+        agent = getattr(self, "agent", None)
+        if agent is None:
+            return None
+        try:
+            if not agent.available():
+                return None
+            result = agent.respond(self.conn, clean, lock=self._db_lock)
+        except Exception:
+            logger.exception("агент упал — разбираю фразу правилами")
+            return None
+        if result is None:
+            return None
+        self.record_usage(
+            "agent",
+            "message",
+            {
+                "engine": result.engine,
+                "tools": result.tools_used(),
+                "latency_ms": result.latency_ms,
+            },
+        )
+        return Reply(result.text)
+
     def _understand(
         self,
         clean: str,
@@ -454,6 +514,9 @@ class BotService:
         message_id: Optional[int] = None,
     ) -> Reply:
         """Разбор фразы и учёт использования — общий вход для текста и голоса."""
+        agent_reply = self._agent_reply(clean)
+        if agent_reply is not None:
+            return agent_reply
         started = time.perf_counter()
         try:
             parsed = self.v4_router.parse(clean)
@@ -1788,6 +1851,13 @@ def build_router(service: BotService) -> Router:
             return
         service.record_command("/evening")
         await _send(message, await asyncio.to_thread(service.handle_evening))
+
+    @router.message(Command("undo"))
+    async def on_undo(message: Message) -> None:
+        if not _allowed(message):
+            return
+        service.record_command("/undo")
+        await _send(message, await asyncio.to_thread(service.handle_undo))
 
     @router.message(Command("reminders"))
     async def on_reminders(message: Message) -> None:

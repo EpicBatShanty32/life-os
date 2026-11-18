@@ -44,6 +44,7 @@ from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
+from app.bot import agent as agent_module
 from app.bot import backup as backup_module
 from app.bot import handlers
 from app.server import db
@@ -443,7 +444,14 @@ async def serve(
         own_bot = bot is None
         bot = bot or build_bot(settings)
         dispatcher = dispatcher or Dispatcher()
-        service = handlers.BotService(settings, conn)
+        # Агент с инструментами — основная голова бота. Без ключа LLM он
+        # неактивен, и сообщения разбирает прежний роутер правилами.
+        agent = agent_module.build_agent(settings)
+        if agent.available():
+            logger.info("агент включён: %d инструментов", len(agent_module.TOOLS))
+        else:
+            logger.info("агент выключен (нет ключа LLM) — работают правила")
+        service = handlers.BotService(settings, conn, agent=agent)
         # /backup идёт первым: общий роутер перехватывает любой текст и ответил
         # бы подсказкой вместо бэкапа.
         dispatcher.include_router(backup_module.build_router(settings, service))

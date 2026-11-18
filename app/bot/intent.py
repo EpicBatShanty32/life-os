@@ -253,6 +253,129 @@ class OpenAICompatibleGateway:
             return result
         return None
 
+    def chat_tools(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        max_tokens: int = 1200,
+        reasoning_effort: Optional[str] = None,
+        timeout: Optional[float] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """Один шаг диалога с инструментами (OpenAI ``tool_calls``).
+
+        Возвращает нормализованное сообщение модели::
+
+            {"content": "...", "tool_calls": [{"id", "name", "arguments"}, ...]}
+
+        В отличие от :meth:`json_chat` ответ не обязан быть JSON: модель либо
+        зовёт инструменты, либо говорит словами. ``None`` — вызов не удался
+        (нет ключа, сеть, HTTP-ошибка): вызывающий уходит на запасной путь.
+        """
+        self.last_error = ""
+        self.last_status = None
+        if not self.available() or not messages:
+            self.last_error = "unavailable"
+            return None
+
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": 0.3,
+            "max_tokens": max(1, min(int(max_tokens), 3000)),
+        }
+        if tools:
+            payload["tools"] = tools
+            payload["tool_choice"] = "auto"
+        effort = (
+            self._effort(reasoning_effort)
+            if reasoning_effort is not None
+            else self.reasoning_effort
+        )
+        if effort and self.reasoning_supported:
+            payload["reasoning"] = {"effort": effort}
+        try:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        except (TypeError, ValueError):
+            self.last_error = "bad_payload"
+            return None
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "Accept": "application/json",
+            "User-Agent": USER_AGENT,
+            "Authorization": "Bearer " + self.api_key,
+        }
+        url = self.base_url + "/chat/completions"
+        try:
+            call_timeout = (
+                min(max(float(timeout), 1.0), 120.0) if timeout is not None else self.timeout
+            )
+        except (TypeError, ValueError):
+            call_timeout = self.timeout
+
+        for attempt in range(1, 3):
+            request = urllib.request.Request(url, data=body, headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(request, timeout=call_timeout) as response:
+                    raw = response.read()
+            except urllib.error.HTTPError as exc:
+                self.last_status = exc.code
+                self.last_error = "http_%s" % exc.code
+                if exc.code == 400 and "reasoning" in payload:
+                    # Провайдер не знает поле reasoning: повтор без него.
+                    self.reasoning_supported = False
+                    payload.pop("reasoning", None)
+                    try:
+                        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                    except (TypeError, ValueError):
+                        self.last_error = "bad_payload"
+                        return None
+                    continue
+                if exc.code == 429 and attempt == 1:
+                    time.sleep(_retry_after(getattr(exc, "headers", None)))
+                    continue
+                logger.error("LLM tools: HTTP %s", exc.code)
+                return None
+            except Exception as exc:  # сеть, таймаут, TLS и т.п.
+                self.last_error = type(exc).__name__
+                logger.error("LLM tools: ошибка запроса (%s)", type(exc).__name__)
+                return None
+            try:
+                data = json.loads(raw.decode("utf-8", "replace"))
+            except (TypeError, ValueError):
+                self.last_error = "bad_response"
+                return None
+            choices = data.get("choices") if isinstance(data, dict) else None
+            message = (choices or [{}])[0].get("message") if choices else None
+            if not isinstance(message, dict):
+                self.last_error = "no_message"
+                return None
+            content = message.get("content")
+            if not isinstance(content, str):
+                content = "" if content is None else str(content)
+            calls: List[Dict[str, Any]] = []
+            for call in message.get("tool_calls") or []:
+                if not isinstance(call, Mapping):
+                    continue
+                function = call.get("function") or {}
+                name = str((function or {}).get("name") or "").strip()
+                if not name:
+                    continue
+                arguments = (function or {}).get("arguments")
+                if not isinstance(arguments, str):
+                    arguments = json.dumps(arguments or {}, ensure_ascii=False)
+                calls.append(
+                    {
+                        "id": str(call.get("id") or ""),
+                        "name": name,
+                        "arguments": arguments,
+                    }
+                )
+            if not calls and not content.strip():
+                self.last_error = "empty"
+                return None
+            return {"content": content.strip(), "tool_calls": calls}
+        return None
+
 
 class ScriptedFallback:
     """Разбор без сети: регулярки на типовые фразы дневника."""

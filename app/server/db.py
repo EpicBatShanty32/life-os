@@ -86,7 +86,7 @@ __all__ = [
     "user_version",
 ]
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 BUSY_TIMEOUT_MS = 5000
 
 #: Таблицы схемы (без FTS-индексов): база v3 и новые сущности v4 из миграции 3.
@@ -136,6 +136,11 @@ TABLES: tuple[str, ...] = (
     "practices",
     "practice_sessions",
     "points_ledger",
+    # миграция 5 — автономный агент: следы, досье, отложенные мысли
+    "agent_messages",
+    "agent_journal",
+    "agent_memory",
+    "agent_thoughts",
 )
 
 #: Виртуальные FTS5-таблицы.
@@ -1078,6 +1083,69 @@ def _migration_4_nutrition(conn: sqlite3.Connection) -> None:
     )
     _move_legacy_food_entries(conn)
 
+# --------------------------------------------------------------------------
+# DDL: миграция 5 — автономный агент
+# --------------------------------------------------------------------------
+
+#: Следы мышления агента. Всё аддитивно: старые таблицы не меняются.
+_MIGRATION_5_DDL: tuple[str, ...] = (
+    # Короткая история диалога: её подмешиваем в контекст модели.
+    """
+    CREATE TABLE IF NOT EXISTS agent_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT ''
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_agent_messages_ts ON agent_messages(ts)",
+    # Журнал: что агент сделал и как это откатить.
+    """
+    CREATE TABLE IF NOT EXISTS agent_journal (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts TEXT NOT NULL,
+      tool TEXT NOT NULL,
+      args TEXT NOT NULL DEFAULT '',
+      result TEXT NOT NULL DEFAULT '',
+      operations TEXT NOT NULL DEFAULT '',
+      label TEXT NOT NULL DEFAULT '',
+      undone INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_agent_journal_ts ON agent_journal(ts)",
+    # Досье: устойчивые факты о человеке (стиль, ценности, контексты).
+    """
+    CREATE TABLE IF NOT EXISTS agent_memory (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      key TEXT NOT NULL UNIQUE,
+      value TEXT NOT NULL DEFAULT '',
+      updated TEXT NOT NULL
+    )
+    """,
+    # Отложенные мысли: агент сам себя будит в нужный момент.
+    """
+    CREATE TABLE IF NOT EXISTS agent_thoughts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      due_ts TEXT NOT NULL,
+      note TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      created TEXT NOT NULL
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_agent_thoughts_due ON agent_thoughts(status, due_ts)",
+)
+
+
+def _migration_5_agent(conn: sqlite3.Connection) -> None:
+    """v5: память и следы автономного агента.
+
+    Четыре таблицы: ``agent_messages`` (короткий диалог), ``agent_journal``
+    (журнал действий с операциями для отката), ``agent_memory`` (досье) и
+    ``agent_thoughts`` (отложенные мысли). Существующие данные не трогаем.
+    """
+    for statement in _MIGRATION_5_DDL:
+        conn.execute(statement)
+
 
 #: Применённые миграции: версия -> SQL-инструкции или функция-миграция.
 MIGRATIONS: Mapping[int, tuple[str, ...] | Callable[[sqlite3.Connection], None]] = {
@@ -1085,6 +1153,7 @@ MIGRATIONS: Mapping[int, tuple[str, ...] | Callable[[sqlite3.Connection], None]]
     2: _migration_2_jobs_meta,
     3: _migration_3_v4_schema,
     4: _migration_4_nutrition,
+    5: _migration_5_agent,
 }
 
 

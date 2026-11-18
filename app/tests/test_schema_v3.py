@@ -281,8 +281,8 @@ def _make_v2_db(path: Path) -> dict[str, int]:
 
 
 def test_fresh_database_is_schema_v3(conn: sqlite3.Connection) -> None:
-    assert SCHEMA_VERSION == 4
-    assert user_version(conn) == 4
+    assert SCHEMA_VERSION == 5
+    assert user_version(conn) == 5
     assert callable(MIGRATIONS[3])
     assert callable(MIGRATIONS[4])
 
@@ -333,7 +333,7 @@ def test_v2_database_migrates_without_data_loss(tmp_path: Path) -> None:
 
     connection = init_db(path)
     try:
-        assert user_version(connection) == 4
+        assert user_version(connection) == 5
         # Ни одна строка v2 не потеряна: пищевая запись переехала в дневник.
         after = _counts(connection, V2_TABLES)
         assert after["entries"] == counts_before["entries"] - 1
@@ -399,10 +399,10 @@ def test_repeated_migrate_is_idempotent_on_fresh_db(conn: sqlite3.Connection) ->
     indexes_before = _index_names(conn)
     counts_before = _counts(conn, TABLES)
 
-    assert migrate(conn) == 4
-    assert migrate(conn) == 4
+    assert migrate(conn) == 5
+    assert migrate(conn) == 5
 
-    assert user_version(conn) == 4
+    assert user_version(conn) == 5
     assert _table_names(conn) == tables_before
     assert _index_names(conn) == indexes_before
     assert _counts(conn, TABLES) == counts_before
@@ -417,8 +417,8 @@ def test_repeated_migrate_is_idempotent_after_v2_upgrade(tmp_path: Path) -> None
 
     connection = init_db(path)
     try:
-        assert migrate(connection) == 4
-        assert user_version(connection) == 4
+        assert migrate(connection) == 5
+        assert user_version(connection) == 5
         # Пищевая запись v2 уехала в дневник — считаем её отдельно.
         counts_after = _counts(connection, V2_TABLES)
         assert counts_after["entries"] == counts_before["entries"] - 1
@@ -426,8 +426,8 @@ def test_repeated_migrate_is_idempotent_after_v2_upgrade(tmp_path: Path) -> None
 
         with connection:
             add_entry(connection, "thought", "Запись после миграции")
-        assert migrate(connection) == 4
-        assert user_version(connection) == 4
+        assert migrate(connection) == 5
+        assert user_version(connection) == 5
         assert _counts(connection, V2_TABLES)["entries"] == counts_after["entries"] + 1
         # Повторная миграция не дублирует перенесённые записи дневника.
         assert _counts(connection, ("food_log",)) == {"food_log": 1}
@@ -436,14 +436,14 @@ def test_repeated_migrate_is_idempotent_after_v2_upgrade(tmp_path: Path) -> None
 
 
 def test_user_version_is_single_source_of_truth(tmp_path: Path) -> None:
-    # База без таблиц, но с заявленной версией 4: migrate верит PRAGMA и не
+    # База без таблиц, но с заявленной версией 5: migrate верит PRAGMA и не
     # переигрывает миграции (источник версии — только user_version).
     connection = connect(tmp_path / "version-only.db")
     try:
-        connection.execute("PRAGMA user_version = 4")
+        connection.execute("PRAGMA user_version = 5")
         connection.commit()
-        assert migrate(connection) == 4
-        assert user_version(connection) == 4
+        assert migrate(connection) == 5
+        assert user_version(connection) == 5
         assert _table_names(connection) == set()
     finally:
         connection.close()
@@ -1033,7 +1033,7 @@ def test_migration_4_moves_food_entries_with_macros(tmp_path: Path) -> None:
 
     conn = init_db(path)
     try:
-        assert user_version(conn) == 4
+        assert user_version(conn) == 5
         diary = conn.execute(
             "SELECT date, ts, meal, text, grams, kcal, protein, fat, source "
             "FROM food_log ORDER BY id"
@@ -1055,7 +1055,7 @@ def test_migration_4_moves_food_entries_with_macros(tmp_path: Path) -> None:
         kinds = [row["kind"] for row in conn.execute("SELECT kind FROM entries")]
         assert kinds == ["thought"]
         # Повторная миграция ничего не дублирует.
-        assert migrate(conn) == 4
+        assert migrate(conn) == 5
         assert conn.execute("SELECT count(*) FROM food_log").fetchone()[0] == 2
     finally:
         conn.close()
