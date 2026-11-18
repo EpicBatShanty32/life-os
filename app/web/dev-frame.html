@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Life OS — кадр в заданном размере</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        background: #ffffff;
+      }
+      #frame {
+        display: block;
+        border: 0;
+        background: transparent;
+      }
+    </style>
+  </head>
+  <body>
+    <iframe id="frame" title="Предпросмотр экрана"></iframe>
+    <script>
+      // Обёртка для скриншотов: `?w=390&h=844&src=/practices-preview.html&bg=%23f5f4f1`.
+      // iframe получает ровно ту ширину, которую проверяем, поэтому медиазапросы
+      // внутри считаются по-настоящему, а кадр не масштабируется.
+      const params = new URLSearchParams(window.location.search);
+      const width = Number(params.get('w') || 390);
+      const height = Number(params.get('h') || 844);
+      const border = params.get('bg');
+      if (border) document.body.style.background = border;
+      const frame = document.getElementById('frame');
+      frame.width = String(width);
+      frame.height = String(height);
+      frame.src = params.get('src') || '/practices-preview.html';
+    </script>
+  </body>
+</html>

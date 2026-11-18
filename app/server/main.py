@@ -39,6 +39,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__
+from app.server import usage as usage_stats
 from app.server.api import api_routers
 from app.server.db import init_db
 from app.server.jobs import JobHandler, WorkerHandle, start_worker as start_job_worker
@@ -111,6 +112,7 @@ def create_app(
     # оказался внешним и отвечал на preflight раньше проверки токена.
     _install_auth(application)
     _install_cache_headers(application)
+    _install_usage_tracking(application)
     _install_cors(application)
 
     for router in api_routers():
@@ -182,6 +184,31 @@ def _install_cache_headers(application: FastAPI) -> None:
                 response.headers["Cache-Control"] = "no-cache, must-revalidate"
             elif path.startswith("/assets/"):
                 response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
+def _install_usage_tracking(application: FastAPI) -> None:
+    """Пишет событие использования для успешных ``GET /api/...`` (веб-экраны).
+
+    Статистика не должна влиять на ответ: любые ошибки записи логируются, а
+    ответ уходит как обычно. Сама статистика и health-check не считаются.
+    """
+
+    @application.middleware("http")
+    async def track_usage(request: Request, call_next):
+        response = await call_next(request)
+        try:
+            if (
+                request.method == "GET"
+                and response.status_code == 200
+                and request.url.path.startswith("/api/")
+            ):
+                target = request.url.path
+                if request.url.query:
+                    target += "?" + request.url.query
+                usage_stats.record_web_request(application.state.settings, target)
+        except Exception:  # pragma: no cover - статистика не ломает продукт
+            logger.exception("не удалось записать событие использования")
         return response
 
 

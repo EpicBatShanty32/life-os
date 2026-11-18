@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent бота Life OS: com.lifeos.bot.
+
+  Шаблон. Ставится командой
+      bash tools/bot-service.sh install
+  которая подставляет:
+      __PYTHON__     → путь к python (официальная сборка Python.framework)
+      __REPO__       → корень проекта (WorkingDirectory)
+      __LOG_DIR__    → <корень>/data/logs
+      __DB_PATH__    → база из config/config.json (paths.db)
+      __TOKEN_LINE__ → строка с LIFEOS_TELEGRAM_TOKEN (пусто по умолчанию)
+
+  Что делает агент:
+    * держит бота запущенным: после перезагрузки мака и входа в систему
+      (RunAtLoad), после падения — KeepAlive SuccessfulExit=false, не чаще
+      одного раза в минуту (ThrottleInterval);
+    * не даёт маку заснуть, пока бот нужен: caffeinate -i -s. -s держит систему
+      бодрой на питании от сети, -i — на батарее (хотите экономить батарею —
+      уберите -i);
+    * запускает tools/bot_launcher.py, а не bash: macOS (TCC) не даёт фоновым
+      заданиям launchd читать папку «Документы» из /bin/bash («Operation not
+      permitted»), а Python.app — приложение, ему можно;
+    * кладёт в окружение процесса LIFEOS_ROOT и LIFEOS_DB_PATH. Токен сюда не
+      копируется: его подхватывает bot_launcher.py из config/config.json
+      (один экземпляр секрета на диске). Нужен токен прямо в plist — ставьте
+      службу с флагом token-in-plist (справка: tools/bot-service.sh help);
+    * свой вывод пишет в data/logs/bot.launchd.log; сам бот — в
+      data/logs/bot.log (ротация 1 МБ × 3). Токен в лог не попадает.
+
+  Остановить: bash tools/bot-service.sh stop
+  Снять совсем: bash tools/bot-service.sh uninstall (база и копии остаются)
+  Второй экземпляр (запущенный вручную) службе не помешает: бот держит
+  data/bot.lock и второй процесс сразу выходит с понятным сообщением.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.lifeos.bot</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/usr/bin/caffeinate</string>
+		<string>-i</string>
+		<string>-s</string>
+		<string>__PYTHON__</string>
+		<string>__REPO__/tools/bot_launcher.py</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>__REPO__</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>LIFEOS_ROOT</key>
+		<string>__REPO__</string>
+		<key>LIFEOS_DB_PATH</key>
+		<string>__DB_PATH__</string>
+		<key>LIFEOS_LOGS_DIR</key>
+		<string>__LOG_DIR__</string>
+		<key>PYTHONUNBUFFERED</key>
+		<string>1</string>
+		<!-- __TOKEN_LINE__ -->
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<!-- Перезапускать только после падения; чистый выход (например, нет
+	     токена — launcher выходит с кодом 0) не должен крутить цикл. -->
+	<key>KeepAlive</key>
+	<dict>
+		<key>SuccessfulExit</key>
+		<false/>
+	</dict>
+	<key>ThrottleInterval</key>
+	<integer>60</integer>
+	<key>ExitTimeOut</key>
+	<integer>30</integer>
+	<key>Umask</key>
+	<integer>63</integer>
+	<key>StandardOutPath</key>
+	<string>__LOG_DIR__/bot.launchd.log</string>
+	<key>StandardErrorPath</key>
+	<string>__LOG_DIR__/bot.launchd.log</string>
+</dict>
+</plist>

@@ -35,7 +35,9 @@ __all__ = [
     "DEFAULT_VAULT_PATH",
     "ConfigError",
     "Settings",
+    "LLM_EFFORTS",
     "SENSITIVE_KEYS",
+    "TRANSCRIBE_ENGINES",
     "get_settings",
     "load_settings",
     "project_root",
@@ -65,6 +67,14 @@ SENSITIVE_KEYS = frozenset(
         "refresh_token",
     }
 )
+
+# Допустимые движки расшифровки голоса: ``off`` — не запускаем на этой машине,
+# ``local`` — whisper здесь же (ffmpeg + faster-whisper).
+TRANSCRIBE_ENGINES = frozenset({"off", "local"})
+
+#: Допустимые уровни «сколько думать» для LLM (стандарт OpenAI/DeepSeek).
+#: Пустая строка — не отправлять подсказку вовсе (провайдер без поддержки).
+LLM_EFFORTS = frozenset({"", "minimal", "low", "medium", "high", "xhigh"})
 
 # Базовые значения v3. Секции telegram/obsidian/llm/paths/app/schedule —
 # зеркало config.example.json v0.x, чтобы старый конфиг читался как есть.
@@ -99,6 +109,21 @@ DEFAULTS: dict[str, Any] = {
         "api_key": "",
         "timeout": 60,
         "max_followups": 2,
+        # «Сколько думать»: разбор фразы — medium (быстро и точно),
+        # ответ о данных — xhigh (нужна аккуратная формулировка по числам).
+        "reasoning_effort": "xhigh",
+        "parse_effort": "medium",
+        "answer_effort": "xhigh",
+        # Таймауты одного вызова: разбор — короткий, ответ — с запасом.
+        "parse_timeout": 8,
+        "answer_timeout": 25,
+    },
+    # Расшифровка голоса. ``off`` — движок на этой машине не запускается
+    # (значение по умолчанию: мак не считает whisper); ``local`` — whisper на
+    # самой машине, нужны ffmpeg и faster-whisper.
+    "transcribe": {
+        "engine": "off",
+        "language": "ru",
     },
     "schedule": {
         "morning": {"time": "08:30", "enabled": True},
@@ -115,6 +140,17 @@ DEFAULTS: dict[str, Any] = {
         "web_dist": "app/web/dist",
     },
 }
+
+def _llm_effort(value: Any, name: str) -> str:
+    """Уровень reasoning effort: пусто или одно из известных значений."""
+    text = str(value if value is not None else "").strip().lower()
+    if text not in LLM_EFFORTS:
+        raise ConfigError(
+            "%s должен быть одним из: %s"
+            % (name, ", ".join(sorted(item or "—" for item in LLM_EFFORTS)))
+        )
+    return text
+
 
 _TRUE_VALUES = frozenset({"1", "true", "yes", "on", "да"})
 _FALSE_VALUES = frozenset({"0", "false", "no", "off", "нет"})
@@ -282,7 +318,7 @@ def _as_bool(value: Any, where: str) -> bool:
 
 def _validate(cfg: dict[str, Any]) -> None:
     """Проверяет типы известных полей и нормализует значения на месте."""
-    for section in ("app", "telegram", "obsidian", "llm", "paths", "schedule"):
+    for section in ("app", "telegram", "obsidian", "llm", "transcribe", "paths", "schedule"):
         if not isinstance(cfg.get(section), dict):
             raise ConfigError("Секция %r конфига должна быть объектом {...}" % section)
 
@@ -338,10 +374,37 @@ def _validate(cfg: dict[str, Any]) -> None:
             raise ConfigError("llm.%s должен быть строкой" % key)
         llm[key] = value
     llm["enabled"] = _as_bool(llm.get("enabled", True), "llm.enabled")
+    for key in ("parse_timeout", "answer_timeout"):
+        value = _as_float(llm.get(key, DEFAULTS["llm"][key]), "llm.%s" % key)
+        if value <= 0:
+            raise ConfigError("llm.%s должен быть больше нуля" % key)
+        llm[key] = value
+    for key in ("reasoning_effort", "parse_effort", "answer_effort"):
+        value = llm.get(key, DEFAULTS["llm"][key])
+        if value is None:
+            value = ""
+        if not isinstance(value, str):
+            raise ConfigError("llm.%s должен быть строкой" % key)
+        llm[key] = _llm_effort(value, "llm.%s" % key)
     timeout = _as_float(llm.get("timeout", 60), "llm.timeout")
     if timeout <= 0:
         raise ConfigError("llm.timeout должен быть больше нуля")
     llm["timeout"] = timeout
+
+    transcribe = cfg["transcribe"]
+    engine = transcribe.get("engine", DEFAULTS["transcribe"]["engine"])
+    if not isinstance(engine, str) or engine.strip().lower() not in TRANSCRIBE_ENGINES:
+        raise ConfigError(
+            "transcribe.engine должен быть одним из: %s"
+            % ", ".join(sorted(TRANSCRIBE_ENGINES))
+        )
+    transcribe["engine"] = engine.strip().lower()
+    language = transcribe.get("language", DEFAULTS["transcribe"]["language"])
+    if language is None:
+        language = ""
+    if not isinstance(language, str):
+        raise ConfigError("transcribe.language должен быть строкой (например, ru)")
+    transcribe["language"] = language.strip() or DEFAULTS["transcribe"]["language"]
 
     paths = cfg["paths"]
     for key in ("data", "db", "media", "logs", "dashboard_out", "web_dist"):
@@ -452,6 +515,41 @@ def _build(
     env_llm_key = _env(env, "LIFEOS_LLM_API_KEY", "DDD_API_KEY")
     llm_api_key = env_llm_key if env_llm_key is not None else llm["api_key"]
 
+    env_parse_effort = _env(env, "LIFEOS_LLM_PARSE_EFFORT")
+    llm_parse_effort = (
+        _llm_effort(env_parse_effort, "LIFEOS_LLM_PARSE_EFFORT")
+        if env_parse_effort is not None
+        else str(llm["parse_effort"])
+    )
+    env_answer_effort = _env(env, "LIFEOS_LLM_ANSWER_EFFORT")
+    llm_answer_effort = (
+        _llm_effort(env_answer_effort, "LIFEOS_LLM_ANSWER_EFFORT")
+        if env_answer_effort is not None
+        else str(llm["answer_effort"])
+    )
+    env_reasoning_effort = _env(env, "LIFEOS_LLM_REASONING_EFFORT")
+    llm_reasoning_effort = (
+        _llm_effort(env_reasoning_effort, "LIFEOS_LLM_REASONING_EFFORT")
+        if env_reasoning_effort is not None
+        else str(llm["reasoning_effort"])
+    )
+    env_parse_timeout = _env(env, "LIFEOS_LLM_PARSE_TIMEOUT")
+    llm_parse_timeout = (
+        _as_float(env_parse_timeout, "LIFEOS_LLM_PARSE_TIMEOUT")
+        if env_parse_timeout is not None
+        else float(llm["parse_timeout"])
+    )
+    if llm_parse_timeout <= 0:
+        raise ConfigError("LIFEOS_LLM_PARSE_TIMEOUT должен быть больше нуля")
+    env_answer_timeout = _env(env, "LIFEOS_LLM_ANSWER_TIMEOUT")
+    llm_answer_timeout = (
+        _as_float(env_answer_timeout, "LIFEOS_LLM_ANSWER_TIMEOUT")
+        if env_answer_timeout is not None
+        else float(llm["answer_timeout"])
+    )
+    if llm_answer_timeout <= 0:
+        raise ConfigError("LIFEOS_LLM_ANSWER_TIMEOUT должен быть больше нуля")
+
     env_llm_timeout = _env(env, "LIFEOS_LLM_TIMEOUT")
     llm_timeout = (
         _as_float(env_llm_timeout, "LIFEOS_LLM_TIMEOUT")
@@ -460,6 +558,18 @@ def _build(
     )
     if llm_timeout <= 0:
         raise ConfigError("LIFEOS_LLM_TIMEOUT должен быть больше нуля")
+
+    env_engine = _env(env, "LIFEOS_TRANSCRIBE_ENGINE")
+    transcribe_engine = (
+        str(env_engine).strip().lower()
+        if env_engine is not None
+        else str(cfg["transcribe"]["engine"])
+    )
+    if transcribe_engine not in TRANSCRIBE_ENGINES:
+        raise ConfigError(
+            "LIFEOS_TRANSCRIBE_ENGINE должен быть одним из: %s"
+            % ", ".join(sorted(TRANSCRIBE_ENGINES))
+        )
 
     env_debug = _env(env, "LIFEOS_DEBUG")
     debug = _as_bool(env_debug, "LIFEOS_DEBUG") if env_debug is not None else False
@@ -487,6 +597,13 @@ def _build(
         llm_model=llm_model,
         llm_api_key=llm_api_key,
         llm_timeout=llm_timeout,
+        llm_reasoning_effort=llm_reasoning_effort,
+        llm_parse_effort=llm_parse_effort,
+        llm_answer_effort=llm_answer_effort,
+        llm_parse_timeout=llm_parse_timeout,
+        llm_answer_timeout=llm_answer_timeout,
+        transcribe_engine=transcribe_engine,
+        transcribe_language=str(cfg["transcribe"]["language"]),
         debug=debug,
         onboarding=bool(app["onboarding"]),
         quiet_hours=tuple(app["quiet_hours"]),
@@ -535,9 +652,22 @@ class Settings:
     llm_model: str
     llm_api_key: str = field(repr=False)
     llm_timeout: float
+    #: Движок расшифровки голоса: ``off`` (по умолчанию) или ``local``.
+    transcribe_engine: str
+    #: Язык расшифровки, подсказка движку (``ru``).
+    transcribe_language: str
     debug: bool
     onboarding: bool
     quiet_hours: tuple[str, ...]
+    #: «Сколько думать» модели: общий уровень и отдельные для разбора фразы
+    #: (быстро) и для ответа по готовым числам (аккуратно). Пустая строка —
+    #: подсказку не отправлять (провайдер без поддержки reasoning).
+    llm_reasoning_effort: str
+    llm_parse_effort: str
+    llm_answer_effort: str
+    #: Таймауты одного вызова модели: разбор фразы и ответ по числам.
+    llm_parse_timeout: float
+    llm_answer_timeout: float
     config: dict[str, Any] = field(repr=False, compare=False)
 
     @property
@@ -601,6 +731,11 @@ class Settings:
                 "model": self.llm_model,
                 "api_key_set": bool(self.llm_api_key),
                 "timeout": self.llm_timeout,
+                "reasoning_effort": self.llm_reasoning_effort,
+                "parse_effort": self.llm_parse_effort,
+                "answer_effort": self.llm_answer_effort,
+                "parse_timeout": self.llm_parse_timeout,
+                "answer_timeout": self.llm_answer_timeout,
             },
             "config_path": str(self.config_path) if self.config_path is not None else None,
             "config": _mask_tree(self.config),

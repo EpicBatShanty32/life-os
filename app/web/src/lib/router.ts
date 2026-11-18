@@ -25,7 +25,6 @@ export const ROUTES: readonly RouteDef[] = [
     path: '/compass',
     title: 'Компас',
     note: 'Сферы, горизонты года, квартала и месяца, анти-цели',
-    soon: true,
   },
   {
     path: '/today',
@@ -36,25 +35,21 @@ export const ROUTES: readonly RouteDef[] = [
     path: '/week',
     title: 'Неделя',
     note: 'Канбан и календарная сетка недели',
-    soon: true,
   },
   {
     path: '/inbox',
     title: 'Инбокс',
     note: 'Парковка идей и триаж',
-    soon: true,
   },
   {
     path: '/projects',
     title: 'Проекты',
     note: 'Карточки проектов, этапы, заметки и ссылки',
-    soon: true,
   },
   {
     path: '/library',
     title: 'Библиотека',
     note: 'Полки книг, цитаты и мысли',
-    soon: true,
   },
   {
     path: '/courses',
@@ -87,6 +82,11 @@ export const ROUTES: readonly RouteDef[] = [
     note: 'Калории, вода, рацион',
   },
   {
+    path: '/practices',
+    title: 'Практики',
+    note: 'Дыхание, растяжка и холод: плеер, очки и серия',
+  },
+  {
     path: '/habits',
     title: 'Привычки',
     note: 'Регулярные действия и серии',
@@ -100,24 +100,26 @@ export const ROUTES: readonly RouteDef[] = [
     path: '/finance',
     title: 'Финансы',
     note: 'Обзор месяца, транзакции, бюджеты',
-    soon: true,
   },
   {
     path: '/personal',
     title: 'Ресурс',
     note: 'Чек-ин энергии и личные списки',
-    soon: true,
   },
   {
     path: '/review',
     title: 'Итоги',
     note: 'Мастер недели и месяца',
-    soon: true,
   },
   {
     path: '/analytics',
     title: 'Аналитика',
     note: 'Энергия, сферы, чтение, деньги',
+  },
+  {
+    path: '/usage',
+    title: 'Статистика',
+    note: 'Как я пользуюсь приложением и о чём пишу',
   },
   {
     path: '/settings',

@@ -1137,12 +1137,13 @@
 
 .habit__emoji {
   display: grid;
+  flex-shrink: 0;
   place-items: center;
   width: 32px;
   height: 32px;
-  border-radius: 10px;
+  border-radius: var(--r-sm);
   background: var(--accent-violet-soft);
-  font-size: 16px;
+  color: var(--text-secondary);
 }
 
 .habit__name {

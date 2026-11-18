@@ -39,6 +39,7 @@ from app.server.seeder import (
     DEMO_INBOX_TEXTS,
     DEMO_PROJECTS,
     DEMO_PROJECT_NAMES,
+    DEMO_PRODUCTS,
     DEMO_PROJECT_NOTES,
     DEMO_SOURCE,
     DEMO_TASK_POOL,
@@ -73,6 +74,8 @@ V4_TABLES: tuple[str, ...] = (
     "budgets",
     "checkins",
     "reviews",
+    "products",
+    "food_log",
 )
 
 
@@ -131,6 +134,14 @@ def _snapshot(connection: sqlite3.Connection) -> dict[str, list[tuple]]:
             "ORDER BY t.ts, t.amount_kopecks, t.note",
         ),
         "books": rows(connection, "SELECT title, shelf, pages_read FROM books ORDER BY id"),
+        "products": rows(
+            connection,
+            "SELECT name, brand, kcal, protein FROM products ORDER BY name",
+        ),
+        "food_log": rows(
+            connection,
+            "SELECT date, meal, text, grams, kcal FROM food_log ORDER BY date, meal, text",
+        ),
         "goals": rows(
             connection,
             "SELECT g.title, g.horizon, s.name, g.deadline FROM goals AS g "
@@ -524,6 +535,9 @@ def test_stats_match_database(seeded: sqlite3.Connection, db: sqlite3.Connection
     for field, value in expected.items():
         assert getattr(stats, field) == value, field
         assert count(db, table_by_field.get(field, field)) == value, field
+    assert stats.products == count(db, "products")
+    assert stats.food_log == count(db, "food_log")
+    assert stats.products == len(DEMO_PRODUCTS)
     assert stats.goal_steps == count(db, "goal_steps")
     assert stats.project_steps == count(db, "project_steps")
     assert stats.book_insights == count(db, "book_insights")

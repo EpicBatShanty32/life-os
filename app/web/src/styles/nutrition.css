@@ -1,0 +1,906 @@
+/* ─────────────────────────────────────────────────────────────
+   Питание: дневник еды, приёмы пищи, вода, история КБЖУ.
+   Только токены DESIGN-v4: hairline вместо теней, плотные строки,
+   tabular-nums в числах, один акцент остаётся в топбаре.
+   ───────────────────────────────────────────────────────────── */
+
+.nu-page {
+  gap: 24px;
+}
+
+/* ── Шапка и переключатель дня ────────────────────────────── */
+
+.nu-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  flex-wrap: wrap;
+}
+
+.nu-head__text {
+  min-width: 0;
+}
+
+.nu-head__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+.nu-day {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nu-day__label {
+  min-width: 116px;
+  padding: 0 4px;
+  text-align: center;
+  color: var(--text);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-line);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── Тихие строки: ошибка блока и текстовая ссылка ────────── */
+
+.nu-note {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-line);
+}
+
+.nu-note svg {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.nu-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.nu-link:hover {
+  text-decoration-color: var(--text);
+}
+
+.nu-link:focus-visible {
+  border-radius: var(--r-xs);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.nu-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── Полоса КБЖУ за день ──────────────────────────────────── */
+
+.nu-strip {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(196px, 1.2fr) repeat(5, minmax(0, 1fr));
+  /* hairline через gap: линии остаются ровными при любой раскладке */
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--border);
+}
+
+.nu-strip__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 13px 15px;
+  background: var(--surface);
+}
+
+.nu-strip__label {
+  color: var(--text-secondary);
+  font-size: var(--text-tiny-size);
+  line-height: var(--text-tiny-line);
+}
+
+.nu-strip__value {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin: 0;
+  color: var(--text);
+  font-size: 26px;
+  line-height: 30px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.nu-strip__value--sm {
+  font-size: 20px;
+  line-height: 24px;
+}
+
+.nu-strip__unit {
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-weight: 500;
+}
+
+.nu-strip__meta {
+  margin: 0 0 2px;
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-variant-numeric: tabular-nums;
+}
+
+.nu-strip__status {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  color: var(--text-tertiary);
+  font-size: var(--text-tiny-size);
+  line-height: var(--text-tiny-line);
+}
+
+.nu-strip-skeleton {
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+/* ── Приёмы пищи ──────────────────────────────────────────── */
+
+.nu-meals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 16px;
+}
+
+.nu-meals__skeleton {
+  grid-column: 1 / -1;
+}
+
+.nu-meal {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  padding: 14px 16px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.nu-meal__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.nu-meal__title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-block-size);
+  line-height: var(--text-block-line);
+  font-weight: 600;
+}
+
+.nu-meal__kcal {
+  color: var(--text);
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.nu-meal__macros {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-variant-numeric: tabular-nums;
+}
+
+.nu-meal__list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--border);
+}
+
+/* ── Строка записи ────────────────────────────────────────── */
+
+.nu-entry {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 0;
+}
+
+.nu-entry + .nu-entry {
+  border-top: 1px solid var(--border);
+}
+
+.nu-entry__main {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.nu-entry__title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0;
+}
+
+.nu-entry__name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nu-entry__kcal {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 3px;
+  flex-shrink: 0;
+  color: var(--text);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-line);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.nu-entry__kcal-unit {
+  color: var(--text-tertiary);
+  font-size: var(--text-tiny-size);
+  font-weight: 400;
+}
+
+.nu-entry__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-variant-numeric: tabular-nums;
+}
+
+.nu-entry__grams {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.nu-entry__macros {
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.nu-entry__dot {
+  color: var(--text-tertiary);
+}
+
+.nu-entry__actions {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+/* Действия строки появляются на hover/focus, на тач-устройствах видны всегда. */
+@media (hover: hover) and (pointer: fine) {
+  .nu-entry__actions {
+    opacity: 0;
+    transition: opacity var(--dur-fast) var(--ease);
+  }
+
+  .nu-entry:hover .nu-entry__actions,
+  .nu-entry:focus-within .nu-entry__actions {
+    opacity: 1;
+  }
+}
+
+.nu-icon-btn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--r-xs);
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    color var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.nu-icon-btn:hover {
+  color: var(--text);
+  background: var(--surface-muted);
+}
+
+.nu-icon-btn--danger:hover {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
+.nu-icon-btn:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* Инлайн-правка граммов */
+
+.nu-entry--editing {
+  border-top: 1px solid var(--border);
+}
+
+.nu-entry__form {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  width: 100%;
+  padding: 1px 0;
+}
+
+.nu-entry__form-label {
+  flex: 1;
+  min-width: 90px;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-line);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nu-entry__form-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nu-entry__input.ui-input {
+  width: 78px;
+  min-height: 28px;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.nu-entry__form-unit {
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+}
+
+.nu-entry__error {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+/* «+ добавить» внизу блока */
+
+.nu-meal__add {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-line);
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease);
+}
+
+.nu-meal__add:hover {
+  color: var(--text);
+}
+
+.nu-meal__add:focus-visible {
+  border-radius: var(--r-xs);
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+/* ── Форма добавления ─────────────────────────────────────── */
+
+.nu-add {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.nu-add__search {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nu-add__list {
+  max-height: 188px;
+  margin: 0;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+
+.nu-add__option {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-line);
+  cursor: pointer;
+}
+
+.nu-add__option + .nu-add__option {
+  border-top: 1px solid var(--border);
+}
+
+.nu-add__option[aria-selected='true'] {
+  background: var(--surface-muted);
+}
+
+.nu-add__option-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nu-add__option-brand {
+  color: var(--text-tertiary);
+}
+
+.nu-add__option-kcal {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.nu-add__chosen {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-soft);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-line);
+}
+
+.nu-add__chosen svg {
+  color: var(--success);
+}
+
+.nu-add__chosen-name {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.nu-add__chosen-kcal {
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+  font-variant-numeric: tabular-nums;
+}
+
+.nu-add__manual {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.nu-add__manual-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.nu-add__foot {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nu-add__grams {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.nu-add__grams-label {
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.nu-add__grams .ui-input {
+  width: 76px;
+  font-variant-numeric: tabular-nums;
+}
+
+.nu-add__grams-unit {
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+}
+
+.nu-add__hint {
+  margin: 0;
+  color: var(--text-tertiary);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.nu-add__error {
+  margin: 0;
+  color: var(--danger);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.nu-add__status {
+  min-height: 16px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+/* ── Карточки воды и истории ──────────────────────────────── */
+
+.nu-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px 18px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.nu-card__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.nu-card__title {
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-block-size);
+  line-height: var(--text-block-line);
+  font-weight: 600;
+}
+
+.nu-card__sub {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.nu-card__meta {
+  color: var(--text-secondary);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-line);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* ── Вода ─────────────────────────────────────────────────── */
+
+.nu-water {
+  display: grid;
+  grid-template-columns: minmax(0, 250px) minmax(0, 1fr);
+  align-items: start;
+  gap: 24px;
+}
+
+.nu-water__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.nu-water__value {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin: 0;
+  color: var(--text);
+  font-size: 30px;
+  line-height: 34px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+
+.nu-water__unit {
+  color: var(--text-secondary);
+  font-size: var(--text-small-size);
+  font-weight: 500;
+}
+
+.nu-water__meta {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  font-variant-numeric: tabular-nums;
+}
+
+.nu-water__quick {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.nu-water__chart {
+  min-width: 0;
+}
+
+.nu-water__empty {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-line);
+}
+
+.nu-water__figure {
+  margin: 0;
+}
+
+.nu-water__bars {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  align-items: end;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.nu-water__bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Фиксированная высота трека: иначе столбики схлопываются в дэши. */
+.nu-water__bar-track {
+  display: flex;
+  align-items: flex-end;
+  width: 100%;
+  height: 72px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--surface-muted);
+}
+
+.nu-water__bar-fill {
+  display: block;
+  width: 100%;
+  border-radius: 3px;
+  background: var(--cat-4);
+  transition: height var(--dur-slow) var(--ease);
+}
+
+.nu-water__bar[data-today='true'] .nu-water__bar-fill {
+  background: var(--cat-1);
+}
+
+.nu-water__bar-label {
+  color: var(--text-tertiary);
+  font-size: 9.5px;
+  line-height: 12px;
+}
+
+.nu-water__bar[data-today='true'] .nu-water__bar-label {
+  color: var(--text);
+  font-weight: 600;
+}
+
+/* ── История КБЖУ ─────────────────────────────────────────── */
+
+.nu-history__scroll {
+  overflow-x: auto;
+}
+
+.nu-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+.nu-table th,
+.nu-table td {
+  padding: 7px 8px;
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--border);
+}
+
+.nu-table thead th {
+  color: var(--text-secondary);
+  font-size: var(--text-tiny-size);
+  font-weight: 500;
+}
+
+.nu-table tbody th {
+  color: var(--text);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+
+.nu-table__weekday {
+  margin-left: 6px;
+  color: var(--text-tertiary);
+  font-size: var(--text-tiny-size);
+}
+
+.nu-table__num {
+  color: var(--text);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.nu-table tfoot th,
+.nu-table tfoot td {
+  border-top: 1px solid var(--border-strong);
+  border-bottom: 0;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* ── Нормы дня ────────────────────────────────────────────── */
+
+.nu-targets {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.nu-targets__error {
+  grid-column: 1 / -1;
+}
+
+/* ── Адаптив ──────────────────────────────────────────────── */
+
+@media (max-width: 1180px) {
+  .nu-strip {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 900px) {
+  .nu-meals {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .nu-water {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+}
+
+@media (max-width: 720px) {
+  .nu-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .nu-add__manual-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 620px) {
+  /* На узком экране таблица живёт без горизонтального скролла:
+     клетчатка и сахара остаются в полосе дня. */
+  .nu-table__cell--optional {
+    display: none;
+  }
+
+  .nu-day {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .nu-day__label {
+    flex: 1;
+  }
+
+  .nu-water__value {
+    font-size: 26px;
+    line-height: 30px;
+  }
+}
+
+@media (max-width: 560px) {
+  .nu-targets {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nu-entry__actions,
+  .nu-icon-btn,
+  .nu-meal__add,
+  .nu-water__bar-fill {
+    transition: none;
+  }
+}

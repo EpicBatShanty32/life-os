@@ -96,7 +96,9 @@ class TranscribeJobHandler:
         source = self._resolve_media(payload)
         report(0.1, "читаю файл")
 
-        transcriber = self.transcriber or transcribe_module.get_transcriber()
+        transcriber = self.transcriber or transcribe_module.get_transcriber(
+            engine=getattr(self.settings, "transcribe_engine", None)
+        )
         try:
             result = transcriber.transcribe(source)
         except Exception as exc:  # на случай сторонней реализации
@@ -431,9 +433,16 @@ def main(argv: Optional[list] = None) -> int:
         logger.error("файл БД несовместим с этой версией: %s", exc)
         return 2
 
-    transcriber = transcribe_module.get_transcriber()
-    info = transcribe_module.toolchain_status()
-    if info.get("ready"):
+    transcribe_engine = getattr(settings, "transcribe_engine", None)
+    transcriber = transcribe_module.get_transcriber(engine=transcribe_engine)
+    info = transcribe_module.toolchain_status(engine=transcribe_engine)
+    if not info.get("enabled"):
+        logger.warning(
+            "транскрибация выключена на этом устройстве (transcribe.engine = %s): "
+            "задачи останутся в pending_toolchain, файлы сохранены",
+            info.get("engine"),
+        )
+    elif info.get("ready"):
         logger.info("транскрибация готова: ffmpeg + %s", info.get("whisper"))
     else:
         logger.warning(

@@ -1,13 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FocusEvent, MouseEvent } from 'react';
 import type { DataSource, NavBadges, SyncStatus as SyncStatusModel } from '../api/types';
 import type { ThemeMode } from '../lib/theme';
-import { SIDEBAR_NAV, SETTINGS_ITEM } from '../nav';
+import { SIDEBAR_NAV } from '../nav';
 import type { NavItem } from '../nav';
 import { BrandMark } from './BrandMark';
 import { Icon } from './Icon';
-import { SyncStatus } from './SyncStatus';
-import { ThemeSwitch } from './ThemeSwitch';
+import { ControlPanel } from './ControlPanel';
 
 interface SidebarProps {
   path: string;
@@ -20,6 +19,7 @@ interface SidebarProps {
   sync: SyncStatusModel | null;
   refreshing: boolean;
   onRefresh: () => void;
+  onOpenSearch: () => void;
 }
 
 interface TipState {
@@ -43,12 +43,38 @@ export function Sidebar({
   sync,
   refreshing,
   onRefresh,
+  onOpenSearch,
 }: SidebarProps) {
   const [tip, setTip] = useState<TipState | null>(null);
+  const [manageOpen, setManageOpen] = useState(false);
+  const manageRef = useRef<HTMLDivElement>(null);
+  const manageBtnRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     setTip(null);
+    setManageOpen(false);
   }, [path, collapsed]);
+
+  useEffect(() => {
+    if (!manageOpen) return;
+    const onDown = (event: globalThis.MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && manageRef.current?.contains(target)) return;
+      if (target && manageBtnRef.current?.contains(target)) return;
+      setManageOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setManageOpen(false);
+      manageBtnRef.current?.focus();
+    };
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [manageOpen]);
 
   const showTip =
     (label: string) => (event: MouseEvent<HTMLElement> | FocusEvent<HTMLElement>) => {
@@ -108,7 +134,6 @@ export function Sidebar({
           <BrandMark size={30} className="sb__mark" />
           <span className="sb__brand-text">
             <span className="sb__brand-title">Life OS</span>
-            <span className="sb__brand-sub">личный контур</span>
           </span>
         </a>
         <button
@@ -148,16 +173,42 @@ export function Sidebar({
         })}
       </nav>
 
-      <div className="sb__foot">
-        <SyncStatus
-          source={source}
-          sync={sync}
-          collapsed={collapsed}
-          refreshing={refreshing}
-          onRefresh={onRefresh}
-        />
-        <ThemeSwitch mode={themeMode} collapsed={collapsed} onSelect={onThemeMode} />
-        {renderLink(SETTINGS_ITEM)}
+      <div className="sb__foot" ref={manageRef}>
+        <button
+          ref={manageBtnRef}
+          type="button"
+          className="sb__manage"
+          aria-expanded={manageOpen}
+          aria-haspopup="dialog"
+          aria-label={collapsed ? 'Управление' : undefined}
+          title={collapsed ? 'Управление' : undefined}
+          onMouseEnter={collapsed ? showTip('Управление') : undefined}
+          onMouseLeave={collapsed ? hideTip : undefined}
+          onFocus={collapsed ? showTip('Управление') : undefined}
+          onBlur={collapsed ? hideTip : undefined}
+          onClick={() => {
+            hideTip();
+            setManageOpen((open) => !open);
+          }}
+        >
+          <span className="sb-row__icon">
+            <Icon name="sliders" size={18} />
+          </span>
+          <span className="sb__manage-label">Управление</span>
+        </button>
+
+        {manageOpen ? (
+          <ControlPanel
+            source={source}
+            sync={sync}
+            refreshing={refreshing}
+            themeMode={themeMode}
+            onThemeMode={onThemeMode}
+            onRefresh={onRefresh}
+            onOpenSearch={onOpenSearch}
+            onClose={() => setManageOpen(false)}
+          />
+        ) : null}
       </div>
 
       {tip ? (

@@ -415,7 +415,8 @@ export function Overview({ data, source, refreshing, onAddWater }: OverviewProps
             <>
               <Card.Header title="Наблюдение дня" />
               <p className="ov-note__text">
-                Устойчивых связей пока нет: нужно ≥ 14 дней с данными и |r| ≥ 0,3.
+                Пока мало данных: связи появятся, когда наберётся не меньше двух
+                недель с записями по обоим показателям.
               </p>
             </>
           )}

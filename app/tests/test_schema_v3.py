@@ -1,10 +1,12 @@
-"""Тесты миграции № 3 — схемы v4 (``studio/HANDOFF-OPUS-5.5.md`` §11).
+"""Тесты миграций № 3–4 — схема v4 (``studio/HANDOFF-OPUS-5.5.md`` §11).
 
 Проверяется контракт схемы:
 
-* свежая база сразу получает ``user_version = 3``, все таблицы/индексы v4;
+* свежая база сразу получает ``user_version = 4``, все таблицы/индексы v4
+  (включая дневник питания: ``products``, ``food_log``, ``nutrition_targets``);
+* записи ``entries.kind = 'food'`` при миграции 4 переезжают в ``food_log``;
 * база v2 (``_MIGRATION_1`` + миграция 2, ``user_version = 2``) переезжает на
-  v3 без потери данных, старые строки получают дефолты новых колонок;
+  v4 без потери данных, старые строки получают дефолты новых колонок;
 * ``migrate`` идемпотентна, ``PRAGMA user_version`` — единственный источник
   версии; защиты ``LegacySchemaError``/``SchemaVersionError`` не сломаны;
 * FK-политики (CASCADE / SET NULL), CHECK- и UNIQUE-констрейнты новых таблиц;
@@ -81,6 +83,16 @@ V3_INDEXES: tuple[str, ...] = (
     "idx_inbox_status",
     "idx_checkins_date",
     "idx_reviews_period_start",
+)
+
+#: Таблицы миграции 4 — дневник питания.
+NUTRITION_TABLES: tuple[str, ...] = ("products", "food_log", "nutrition_targets")
+
+#: Индексы дневника питания.
+NUTRITION_INDEXES: tuple[str, ...] = (
+    "idx_products_name",
+    "idx_food_log_date",
+    "idx_food_log_meal",
 )
 
 #: Таблицы схемы v2 — их содержимое обязано пережить миграцию.
@@ -269,9 +281,10 @@ def _make_v2_db(path: Path) -> dict[str, int]:
 
 
 def test_fresh_database_is_schema_v3(conn: sqlite3.Connection) -> None:
-    assert SCHEMA_VERSION == 3
-    assert user_version(conn) == 3
+    assert SCHEMA_VERSION == 4
+    assert user_version(conn) == 4
     assert callable(MIGRATIONS[3])
+    assert callable(MIGRATIONS[4])
 
     tables = _table_names(conn)
     for table in TABLES:
@@ -320,9 +333,22 @@ def test_v2_database_migrates_without_data_loss(tmp_path: Path) -> None:
 
     connection = init_db(path)
     try:
-        assert user_version(connection) == 3
-        # Ни одна строка v2 не потеряна и не задублирована.
-        assert _counts(connection, V2_TABLES) == counts_before
+        assert user_version(connection) == 4
+        # Ни одна строка v2 не потеряна: пищевая запись переехала в дневник.
+        after = _counts(connection, V2_TABLES)
+        assert after["entries"] == counts_before["entries"] - 1
+        for table in V2_TABLES:
+            if table != "entries":
+                assert after[table] == counts_before[table], table
+        assert _counts(connection, ("food_log",)) == {"food_log": 1}
+        diary = connection.execute(
+            "SELECT date, meal, text, kcal, source FROM food_log"
+        ).fetchone()
+        assert diary["date"] == "2026-11-01"
+        assert diary["meal"] == "breakfast"
+        assert diary["text"] == "Овсянка на завтрак"
+        assert diary["kcal"] == 0.0
+        assert diary["source"] == "telegram"
 
         # Новые таблицы появились и пусты.
         tables = _table_names(connection)
@@ -330,10 +356,8 @@ def test_v2_database_migrates_without_data_loss(tmp_path: Path) -> None:
             assert table in tables, "нет таблицы %s" % table
         assert _counts(connection, NEW_TABLES) == {table: 0 for table in NEW_TABLES}
 
-        # Данные v2 читаются как раньше.
-        assert [row["text"] for row in search_entries(connection, "овсянка")] == [
-            "Овсянка на завтрак"
-        ]
+        # Журнал v2 читается как раньше; «еда» из него уехала в дневник.
+        assert search_entries(connection, "овсянка") == []
         assert search_entries(connection, "спать")[0]["kind"] == "thought"
         goal = connection.execute("SELECT * FROM goals").fetchone()
         assert goal["title"] == "Дойти до 78 кг"
@@ -375,10 +399,10 @@ def test_repeated_migrate_is_idempotent_on_fresh_db(conn: sqlite3.Connection) ->
     indexes_before = _index_names(conn)
     counts_before = _counts(conn, TABLES)
 
-    assert migrate(conn) == 3
-    assert migrate(conn) == 3
+    assert migrate(conn) == 4
+    assert migrate(conn) == 4
 
-    assert user_version(conn) == 3
+    assert user_version(conn) == 4
     assert _table_names(conn) == tables_before
     assert _index_names(conn) == indexes_before
     assert _counts(conn, TABLES) == counts_before
@@ -393,28 +417,33 @@ def test_repeated_migrate_is_idempotent_after_v2_upgrade(tmp_path: Path) -> None
 
     connection = init_db(path)
     try:
-        assert migrate(connection) == 3
-        assert user_version(connection) == 3
-        assert _counts(connection, V2_TABLES) == counts_before
+        assert migrate(connection) == 4
+        assert user_version(connection) == 4
+        # Пищевая запись v2 уехала в дневник — считаем её отдельно.
+        counts_after = _counts(connection, V2_TABLES)
+        assert counts_after["entries"] == counts_before["entries"] - 1
+        assert _counts(connection, ("food_log",)) == {"food_log": 1}
 
         with connection:
             add_entry(connection, "thought", "Запись после миграции")
-        assert migrate(connection) == 3
-        assert user_version(connection) == 3
-        assert _counts(connection, V2_TABLES)["entries"] == counts_before["entries"] + 1
+        assert migrate(connection) == 4
+        assert user_version(connection) == 4
+        assert _counts(connection, V2_TABLES)["entries"] == counts_after["entries"] + 1
+        # Повторная миграция не дублирует перенесённые записи дневника.
+        assert _counts(connection, ("food_log",)) == {"food_log": 1}
     finally:
         connection.close()
 
 
 def test_user_version_is_single_source_of_truth(tmp_path: Path) -> None:
-    # База без таблиц, но с заявленной версией 3: migrate верит PRAGMA и не
+    # База без таблиц, но с заявленной версией 4: migrate верит PRAGMA и не
     # переигрывает миграции (источник версии — только user_version).
     connection = connect(tmp_path / "version-only.db")
     try:
-        connection.execute("PRAGMA user_version = 3")
+        connection.execute("PRAGMA user_version = 4")
         connection.commit()
-        assert migrate(connection) == 3
-        assert user_version(connection) == 3
+        assert migrate(connection) == 4
+        assert user_version(connection) == 4
         assert _table_names(connection) == set()
     finally:
         connection.close()
@@ -907,3 +936,126 @@ def test_active_tasks_and_books_reports(conn: sqlite3.Connection) -> None:
         "SELECT title FROM tasks WHERE due_date = '2026-11-17' AND status = 'todo' ORDER BY title"
     ).fetchall()
     assert [row["title"] for row in due] == ["Отчёт"]
+
+
+# --------------------------------------------------------------------------
+# Миграция 4: дневник питания
+# --------------------------------------------------------------------------
+
+
+def test_fresh_database_has_nutrition_schema(conn: sqlite3.Connection) -> None:
+    """Свежая база: таблицы и индексы дневника, нормы по умолчанию."""
+    tables = _table_names(conn)
+    for table in NUTRITION_TABLES:
+        assert table in tables, "нет таблицы %s" % table
+
+    indexes = _index_names(conn)
+    missing = [name for name in NUTRITION_INDEXES if name not in indexes]
+    assert missing == []
+
+    assert _counts(conn, ("products", "food_log")) == {"products": 0, "food_log": 0}
+    targets = conn.execute("SELECT * FROM nutrition_targets").fetchone()
+    assert targets["id"] == 1
+    assert targets["kcal"] == 2300
+    assert targets["protein"] == 150
+    assert targets["fat"] == 75
+    assert targets["carbs"] == 260
+    assert targets["fiber"] == 30
+    assert targets["sugar"] == 50
+    assert targets["water_ml"] == 2200
+    assert targets["updated"] is not None
+
+
+def test_food_log_check_and_product_reference(conn: sqlite3.Connection) -> None:
+    """``meal`` ограничен CHECK, удаление продукта обнуляет ссылку (SET NULL)."""
+    _assert_check_violation(
+        conn,
+        "INSERT INTO food_log(date, ts, meal, grams) VALUES ('2026-11-17', "
+        "'2026-11-17T08:00:00+03:00', 'brunch', 100)",
+    )
+    product_id = _insert(
+        conn, "INSERT INTO products(name, kcal) VALUES ('Гречка', 343)"
+    )
+    with conn:
+        entry_id = _insert(
+            conn,
+            "INSERT INTO food_log(date, ts, meal, product_id, grams, kcal) "
+            "VALUES ('2026-11-17', '2026-11-17T08:00:00+03:00', 'breakfast', ?, 100, 343)",
+            (product_id,),
+        )
+    assert (
+        conn.execute("SELECT product_id FROM food_log WHERE id = ?", (entry_id,)).fetchone()[0]
+        == product_id
+    )
+
+    with conn:
+        conn.execute("DELETE FROM products WHERE id = ?", (product_id,))
+    row = conn.execute("SELECT product_id, kcal FROM food_log WHERE id = ?", (entry_id,)).fetchone()
+    assert row["product_id"] is None
+    assert row["kcal"] == 343
+
+
+def test_migration_4_moves_food_entries_with_macros(tmp_path: Path) -> None:
+    """``entries.kind='food'`` уезжает в ``food_log`` с макросами из meta_json."""
+    path = tmp_path / "v2-food.db"
+    connection = connect(path)
+    try:
+        _apply_v2_schema(connection)
+        with connection:
+            connection.executemany(
+                "INSERT INTO entries(ts, kind, text, source, meta_json) VALUES (?,?,?,?,?)",
+                [
+                    (
+                        "2026-11-01T08:15:00+03:00",
+                        "food",
+                        "Завтрак: Овсянка",
+                        "demo",
+                        '{"meal":"Завтрак","kcal":320,"protein_g":12,"fat_g":6,"carbs_g":52}',
+                    ),
+                    (
+                        "2026-11-01T20:45:00+03:00",
+                        "food",
+                        "Ужин: Творог",
+                        "demo",
+                        '{"kcal":180,"protein_g":20}',
+                    ),
+                    (
+                        "2026-11-01T21:00:00+03:00",
+                        "thought",
+                        "Мысль дня",
+                        "telegram",
+                        "{}",
+                    ),
+                ],
+            )
+    finally:
+        connection.close()
+
+    conn = init_db(path)
+    try:
+        assert user_version(conn) == 4
+        diary = conn.execute(
+            "SELECT date, ts, meal, text, grams, kcal, protein, fat, source "
+            "FROM food_log ORDER BY id"
+        ).fetchall()
+        assert len(diary) == 2
+        assert diary[0]["date"] == "2026-11-01"
+        assert diary[0]["meal"] == "breakfast"
+        assert diary[0]["kcal"] == 320
+        assert diary[0]["protein"] == 12
+        assert diary[0]["fat"] == 6
+        assert diary[0]["grams"] == 250
+        assert diary[0]["source"] == "demo"
+        # Без meta.meal приём пищи определяется по часу записи.
+        assert diary[1]["meal"] == "dinner"
+        assert diary[1]["kcal"] == 180
+        assert diary[1]["protein"] == 20
+
+        # В журнале остались только непищевые записи.
+        kinds = [row["kind"] for row in conn.execute("SELECT kind FROM entries")]
+        assert kinds == ["thought"]
+        # Повторная миграция ничего не дублирует.
+        assert migrate(conn) == 4
+        assert conn.execute("SELECT count(*) FROM food_log").fetchone()[0] == 2
+    finally:
+        conn.close()

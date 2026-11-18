@@ -1,0 +1,427 @@
+/* ─────────────────────────────────────────────────────────────
+   Обзор v4 — «дневник дня». Пульс одной полосой, bento 12 колонок,
+   заголовок экрана 22 px, никаких круглых медальонов и пастели.
+   Контракт: studio/DESIGN-v4.md §4.
+   ───────────────────────────────────────────────────────────── */
+
+.page.ov {
+  gap: var(--sp-5);
+  padding-top: var(--sp-2);
+}
+
+.ov__head {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ov__date {
+  color: var(--text-tertiary);
+  font-size: var(--text-caption-size);
+  font-weight: 500;
+  line-height: var(--text-caption-line);
+}
+
+.ov__title {
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 28px;
+}
+
+.ov__fact {
+  color: var(--text-secondary);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-line);
+}
+
+/* ── Пульс дня: одна полоса, ячейки через hairline ────────── */
+
+.ov-pulse {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+}
+
+.ov-pulse__cell {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  min-width: 0;
+  padding: var(--sp-4);
+}
+
+.ov-pulse__cell + .ov-pulse__cell {
+  border-left: 1px solid var(--border);
+}
+
+.ov-pulse .ui-kpi {
+  gap: 4px;
+}
+
+.ov-pulse .ui-kpi__label {
+  color: var(--text-tertiary);
+  font-size: var(--text-tiny-size);
+  line-height: var(--text-tiny-line);
+}
+
+.ov-pulse .ui-kpi__number {
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  line-height: 26px;
+}
+
+.ov-pulse .ui-kpi__unit {
+  color: var(--text-secondary);
+  font-size: var(--text-caption-size);
+}
+
+.ov-pulse .ui-kpi__delta,
+.ov-pulse .ui-kpi__hint {
+  font-size: var(--text-tiny-size);
+  line-height: var(--text-tiny-line);
+}
+
+.ov-pulse__actions {
+  display: flex;
+  gap: var(--sp-1);
+  margin-top: auto;
+}
+
+.ov-step {
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  color: var(--text-secondary);
+  font-family: var(--font-num);
+  font-size: var(--text-tiny-size);
+  font-variant-numeric: tabular-nums;
+  transition: border-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.ov-step:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+/* ── Bento: план слева, тело и учение справа ─────────────── */
+
+.ov-bento {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  gap: var(--sp-4);
+}
+
+.ov-col {
+  display: flex;
+  grid-column: span 8;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+.ov-col--side {
+  grid-column: span 4;
+}
+
+.ov-note {
+  grid-column: span 12;
+}
+
+/* План на сегодня */
+
+.ov-plan__list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0 calc(var(--sp-2) * -1);
+}
+
+.ov-plan__row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 38px;
+  padding: 6px var(--sp-2);
+  border-radius: var(--r-sm);
+}
+
+.ov-plan__row:hover {
+  background: var(--surface-soft);
+}
+
+.ov-plan__dot {
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.ov-plan__dot[data-tone='cat-1'] {
+  background: var(--cat-1);
+}
+
+.ov-plan__dot[data-tone='cat-2'] {
+  background: var(--cat-2);
+}
+
+.ov-plan__dot[data-tone='cat-3'] {
+  background: var(--cat-3);
+}
+
+.ov-plan__dot[data-tone='cat-4'] {
+  background: var(--cat-4);
+}
+
+.ov-plan__dot[data-tone='cat-5'] {
+  background: var(--cat-5);
+}
+
+.ov-plan__check {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.ov-plan__row[data-done='true'] .ui-checkbox__label {
+  color: var(--text-tertiary);
+  text-decoration: line-through;
+  text-decoration-color: var(--border-strong);
+}
+
+.ov-plan__row[data-done='true'] .ui-checkbox__description {
+  color: var(--text-tertiary);
+}
+
+.ov-plan__time {
+  flex-shrink: 0;
+  min-width: 36px;
+  color: var(--text-tertiary);
+  font-family: var(--font-num);
+  font-size: var(--text-caption-size);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* Неделя: семь узких колонок активности */
+
+.ov-week__bars {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+}
+
+.ov-week__col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.ov-week__track {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  width: 100%;
+  height: 56px;
+}
+
+.ov-week__bar {
+  width: 8px;
+  border-radius: var(--r-xs);
+  background: var(--cat-4);
+}
+
+.ov-week__bar[data-today='true'] {
+  background: var(--accent);
+}
+
+.ov-week__value {
+  color: var(--text-tertiary);
+  font-size: var(--text-tiny-size);
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-week__label {
+  color: var(--text-tertiary);
+  font-size: var(--text-tiny-size);
+  line-height: var(--text-tiny-line);
+}
+
+.ov-week__label[data-today='true'] {
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* Тело */
+
+.ov-body__value {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ov-body__number {
+  font-family: var(--font-num);
+  font-size: 26px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.ov-body__unit {
+  color: var(--text-secondary);
+  font-size: var(--text-small-size);
+}
+
+.ov-body__delta {
+  margin-left: auto;
+  font-size: var(--text-tiny-size);
+  font-variant-numeric: tabular-nums;
+}
+
+.ov-body__delta[data-tone='good'] {
+  color: var(--success);
+}
+
+.ov-body__delta[data-tone='warn'] {
+  color: var(--warning);
+}
+
+.ov-body__foot {
+  margin-top: var(--sp-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-tiny-size);
+}
+
+.ov-body .sparkline {
+  margin-top: var(--sp-3);
+}
+
+/* Учение */
+
+.ov-study__course {
+  font-size: var(--text-body-size);
+  font-weight: 600;
+  line-height: var(--text-body-line);
+}
+
+.ov-study__lesson {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-line);
+}
+
+.ov-study .ui-progress {
+  margin-top: var(--sp-3);
+}
+
+.ov-study__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+/* Наблюдение и строка ссылок */
+
+.ov-note__text {
+  color: var(--text-secondary);
+  font-size: var(--text-body-size);
+  line-height: var(--text-body-line);
+}
+
+.ov-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--sp-2);
+  color: var(--text-tertiary);
+  font-size: var(--text-small-size);
+}
+
+.ov-links a {
+  border-radius: var(--r-xs);
+  color: var(--text-secondary);
+}
+
+.ov-links a:hover {
+  color: var(--text);
+}
+
+/* ── Адаптив ─────────────────────────────────────────────── */
+
+@media (max-width: 1180px) {
+  .ov-pulse {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .ov-pulse__cell:nth-child(3n + 1) {
+    border-left: 0;
+  }
+
+  .ov-pulse__cell:nth-child(n + 4) {
+    border-top: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 900px) {
+  .ov-bento {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+  }
+
+  .ov-col {
+    gap: var(--sp-3);
+  }
+
+  .page.ov {
+    gap: var(--sp-4);
+  }
+
+  /* Ссылки-действия в шапках карточек дублируют нижнюю строку ссылок
+     и могут попадать под FAB — на узких экранах убираем их из шапок. */
+  .ov .ui-card__actions {
+    display: none;
+  }
+}
+
+@media (max-width: 640px) {
+  .ov-pulse {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ov-pulse__cell {
+    padding: var(--sp-3);
+  }
+
+  .ov-pulse__cell:nth-child(2n + 1) {
+    border-left: 0;
+  }
+
+  .ov-pulse__cell:nth-child(n + 3) {
+    border-top: 1px solid var(--border);
+  }
+
+  .ov__title {
+    font-size: 20px;
+    line-height: 26px;
+  }
+
+  .ov-plan__row {
+    gap: var(--sp-2);
+  }
+
+  /* Ссылки-действия в шапках карточек на мобиле дублируют нижнюю строку. */
+}

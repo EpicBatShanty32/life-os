@@ -1,7 +1,7 @@
 """SQLite-слой Life OS v3: подключение, схема, миграции, FTS5-поиск.
 
 Схема версионируется через ``PRAGMA user_version``; текущая версия —
-:data:`SCHEMA_VERSION` (= 3). :func:`migrate` идемпотентна: повторный вызов на
+:data:`SCHEMA_VERSION` (= 4). :func:`migrate` идемпотентна: повторный вызов на
 актуальной базе ничего не делает и не дублирует данные.
 
 Миграция 3 — схема v4 из ``studio/HANDOFF-OPUS-5.5.md`` §11: сферы, проекты,
@@ -9,6 +9,27 @@
 ``goals``/``courses``/``habits``. Она только добавляет объекты (``CREATE ...
 IF NOT EXISTS`` и проверяемый ``ALTER TABLE ADD COLUMN``), поэтому база v2
 переезжает без потери данных.
+
+Миграция 4 — дневник питания: справочник ``products`` (КБЖУ на 100 г),
+``food_log`` (записи дневника по приёмам пищи) и ``nutrition_targets``
+(единственная строка с нормами). Старые записи ``entries`` с
+``kind = 'food'`` переносятся в ``food_log`` (макросы — из ``meta_json``,
+приём пищи — из ``meta.meal``), чтобы еда жила в одном месте и не
+дублировалась; исходные строки ``entries`` удаляются.
+
+Миграция №5 — практики и очки: ``practices`` (каталог дыхательных и телесных
+практик со шагами и уровнями), ``practice_sessions`` (одна сессия на практику
+в день) и ``points_ledger`` (журнал начислений). Как и таблица событий
+использования, этот блок создаётся идемпотентно в :func:`migrate` и не
+поднимает :data:`SCHEMA_VERSION` (4): схема только расширяется, данные не
+переносятся, поэтому база живёт с ботом, вебом и сидером одной версии.
+Сумма очков всегда считается из ``points_ledger`` — счётчика-строки нет.
+
+Миграция №6 — интеграции веса: таблица ``integrations`` (``key``, заголовок,
+``kind='import'|'manual'``, ``enabled``, ``last_sync``, заметки) и три базовые
+записи (весы по файлу, Apple Health по экспорту, ручной ввод). Тоже
+идемпотентный аддитивный блок: ``SCHEMA_VERSION`` остаётся 4, данные не
+переносятся, пользовательские ``enabled``/``last_sync`` не перезатираются.
 
 Что важно знать о схеме:
 
@@ -39,6 +60,8 @@ from typing import Any, Callable, Mapping
 
 __all__ = [
     "BUSY_TIMEOUT_MS",
+    "DEFAULT_NUTRITION_TARGETS",
+    "FOOD_MEALS",
     "FTS_TABLES",
     "LegacySchemaError",
     "SCHEMA_VERSION",
@@ -48,6 +71,9 @@ __all__ = [
     "add_metric",
     "connect",
     "ensure_fts",
+    "ensure_integrations",
+    "ensure_practices",
+    "ensure_usage_events",
     "fts5_available",
     "fts_query",
     "get_setting",
@@ -60,7 +86,7 @@ __all__ = [
     "user_version",
 ]
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 BUSY_TIMEOUT_MS = 5000
 
 #: Таблицы схемы (без FTS-индексов): база v3 и новые сущности v4 из миграции 3.
@@ -98,6 +124,18 @@ TABLES: tuple[str, ...] = (
     "budgets",
     "checkins",
     "reviews",
+    # миграция 4 — дневник питания
+    "products",
+    "food_log",
+    "nutrition_targets",
+    # события использования (веб и бот в одной таблице; ensure, без смены версии)
+    "usage_events",
+    # миграция №6 — интеграции веса (аддитивный блок, см. ensure_integrations)
+    "integrations",
+    # миграция №5 — практики и очки (аддитивный блок, см. ensure_practices)
+    "practices",
+    "practice_sessions",
+    "points_ledger",
 )
 
 #: Виртуальные FTS5-таблицы.
@@ -615,11 +653,438 @@ def _migration_3_v4_schema(conn: sqlite3.Connection) -> None:
         _add_column_if_missing(conn, table, column, ddl)
 
 
+# --------------------------------------------------------------------------
+# Миграция 4 — дневник питания (КБЖУ, справочник продуктов, нормы)
+# --------------------------------------------------------------------------
+
+#: Нормы по умолчанию: ккал, белки, жиры, углеводы, клетчатка, сахар, вода (мл).
+DEFAULT_NUTRITION_TARGETS: Mapping[str, float] = {
+    "kcal": 2300.0,
+    "protein": 150.0,
+    "fat": 75.0,
+    "carbs": 260.0,
+    "fiber": 30.0,
+    "sugar": 50.0,
+    "water_ml": 2200.0,
+}
+
+#: Приёмы пищи в том порядке, в каком их показывает дневник.
+FOOD_MEALS: tuple[str, ...] = ("breakfast", "lunch", "dinner", "snack")
+
+#: Русские подписи приёмов пищи из ``entries.meta.meal`` → код дневника.
+_MEAL_BY_LABEL: Mapping[str, str] = {
+    "завтрак": "breakfast",
+    "обед": "lunch",
+    "ужин": "dinner",
+    "перекус": "snack",
+}
+
+#: Порция по умолчанию для записей, перенесённых из ``entries``: там хранились
+#: только макросы, без граммовки. 250 г — обычная порция готового блюда;
+#: пользователь может уточнить её через ``PATCH /api/nutrition/entries/{id}``.
+_LEGACY_FOOD_GRAMS = 250.0
+
+_MIGRATION_4_DDL: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        brand TEXT NOT NULL DEFAULT '',
+        kcal REAL NOT NULL DEFAULT 0,
+        protein REAL NOT NULL DEFAULT 0,
+        fat REAL NOT NULL DEFAULT 0,
+        carbs REAL NOT NULL DEFAULT 0,
+        fiber REAL NOT NULL DEFAULT 0,
+        sugar REAL NOT NULL DEFAULT 0,
+        base_grams REAL NOT NULL DEFAULT 100,
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        archived INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS food_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        ts TEXT NOT NULL,
+        meal TEXT NOT NULL CHECK (meal IN ('breakfast', 'lunch', 'dinner', 'snack')),
+        product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+        text TEXT NOT NULL DEFAULT '',
+        grams REAL NOT NULL DEFAULT 0,
+        kcal REAL NOT NULL DEFAULT 0,
+        protein REAL NOT NULL DEFAULT 0,
+        fat REAL NOT NULL DEFAULT 0,
+        carbs REAL NOT NULL DEFAULT 0,
+        fiber REAL NOT NULL DEFAULT 0,
+        sugar REAL NOT NULL DEFAULT 0,
+        source TEXT NOT NULL DEFAULT ''
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS nutrition_targets (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        kcal REAL NOT NULL DEFAULT 2300,
+        protein REAL NOT NULL DEFAULT 150,
+        fat REAL NOT NULL DEFAULT 75,
+        carbs REAL NOT NULL DEFAULT 260,
+        fiber REAL NOT NULL DEFAULT 30,
+        sugar REAL NOT NULL DEFAULT 50,
+        water_ml REAL NOT NULL DEFAULT 2200,
+        updated TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_products_name ON products(name)",
+    "CREATE INDEX IF NOT EXISTS idx_food_log_date ON food_log(date)",
+    "CREATE INDEX IF NOT EXISTS idx_food_log_meal ON food_log(meal)",
+)
+
+#: Таблица событий использования: один канал — одна строка, веб и бот вместе.
+#: Создаётся идемпотентно на каждом старте, чтобы базы, уже стоящие на v4,
+#: получили её без смены номера схемы.
+_MIGRATION_5_USAGE_DDL: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS usage_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,
+        source TEXT NOT NULL CHECK (source IN ('web', 'bot')),
+        screen TEXT NOT NULL,
+        action TEXT NOT NULL DEFAULT 'view',
+        meta_json TEXT NOT NULL DEFAULT '{}'
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_ts ON usage_events(ts)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_events_source_screen "
+    "ON usage_events(source, screen, ts)",
+)
+
+
+def ensure_usage_events(conn: sqlite3.Connection) -> None:
+    """Создаёт таблицу событий использования на любой версии схемы (идемпотентно)."""
+    for statement in _MIGRATION_5_USAGE_DDL:
+        conn.execute(statement)
+
+
+#: Интеграции веса — миграция №6. Как и события использования, блок создаётся
+#: идемпотентно и не поднимает ``SCHEMA_VERSION``: данные не переносятся, схема
+#: только расширяется. Реальных OAuth-интеграций нет — ``kind='import'``
+#: означает загрузку файла вручную, ``kind='manual'`` — ручной ввод.
+_MIGRATION_6_INTEGRATIONS_DDL: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS integrations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT NOT NULL UNIQUE
+            CHECK (key IN ('scale', 'apple-health', 'withings', 'manual')),
+        title TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('import', 'manual')),
+        enabled INTEGER NOT NULL DEFAULT 1,
+        last_sync TEXT,
+        notes TEXT NOT NULL DEFAULT ''
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_integrations_enabled ON integrations(enabled)",
+)
+
+#: Три записи, которые видит пользователь: весы по файлу, Apple Health по
+#: экспорту и ручной ввод. ``withings`` разрешён схемой, но не включён: это
+#: честный интерфейс импорта, а не OAuth-подключение.
+_INTEGRATION_DEFAULTS: tuple[tuple[str, str, str, int, str], ...] = (
+    (
+        "scale",
+        "Весы по файлу",
+        "import",
+        1,
+        "CSV или JSON с колонками date, weight (кг). Файл выбираете сами — "
+        "OAuth и фоновой синхронизации нет.",
+    ),
+    (
+        "apple-health",
+        "Apple Health по экспорту",
+        "import",
+        1,
+        "Файл «Экспорт всех данных» из Apple Health: импорт веса из CSV или "
+        "JSON. Без OAuth — только ручная загрузка файла.",
+    ),
+    (
+        "manual",
+        "Ручной ввод веса",
+        "manual",
+        1,
+        "Ввод веса в боте или на экране «Тело»; внешние сервисы не "
+        "подключаются.",
+    ),
+)
+
+
+def ensure_integrations(conn: sqlite3.Connection, *, commit: bool = True) -> None:
+    """Создаёт ``integrations`` и три базовые записи (идемпотентно).
+
+    ``INSERT OR IGNORE`` по уникальному ``key``: перезапуск сервера и повторный
+    сид не перезатирают пользовательское ``enabled``/``lastSync``. ``withings``
+    разрешён CHECK-ом (на будущее), но строки по умолчанию не получает.
+
+    ``commit=True`` нужен при вызове из :func:`migrate`: без коммита строки
+    откатились бы при закрытии bootstrap-соединения. Сидер вызывает с
+    ``commit=False``, потому что сам держит общую транзакцию ``with conn``.
+    """
+    for statement in _MIGRATION_6_INTEGRATIONS_DDL:
+        conn.execute(statement)
+    for key, title, kind, enabled, notes in _INTEGRATION_DEFAULTS:
+        conn.execute(
+            "INSERT OR IGNORE INTO integrations (key, title, kind, enabled, notes) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (key, title, kind, enabled, notes),
+        )
+    if commit:
+        conn.commit()
+
+
+#: Практики и очки — миграция №5 (дизайн: ``studio/PRACTICES.md``). Блок
+#: создаётся идемпотентно, как и таблица событий использования, и не поднимает
+#: ``SCHEMA_VERSION``: данные не переносятся, схема только расширяется.
+#:
+#: Решения, которые видно снаружи:
+#:
+#: * ``practice_sessions`` — одна строка на практику в день
+#:   (``UNIQUE(practice_id, date)``): повторное сохранение сессии обновляет
+#:   ``rounds_done``/``best_hold_s`` по максимуму и очков второй раз не даёт;
+#: * ``points_ledger`` — единственный источник суммы очков (счётчика-строки
+#:   нет). ``UNIQUE(kind, ref_id)`` — атомарная защита от повторов: слияние
+#:   идёт в одной инструкции ``INSERT ... ON CONFLICT DO NOTHING``, а не
+#:   через «прочитал-проверил-записал»;
+#: * ``points_ledger.source`` отделяет очки пользователя (``app``) от
+#:   демонстрационных (``demo``), чтобы ``clear_demo`` удалял только демо.
+_PRACTICES_DDL: tuple[str, ...] = (
+    """
+    CREATE TABLE IF NOT EXISTS practices (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        slug TEXT NOT NULL UNIQUE,
+        title TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('breathing', 'stretch', 'other')),
+        description TEXT NOT NULL DEFAULT '',
+        steps_json TEXT NOT NULL DEFAULT '[]',
+        levels_json TEXT NOT NULL DEFAULT '[]',
+        safety_note TEXT NOT NULL DEFAULT '',
+        duration_s INTEGER NOT NULL DEFAULT 0,
+        sort INTEGER NOT NULL DEFAULT 0,
+        created TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
+        archived INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS practice_sessions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        date TEXT NOT NULL,
+        ts TEXT NOT NULL,
+        practice_id INTEGER NOT NULL REFERENCES practices(id) ON DELETE CASCADE,
+        started_ts TEXT NOT NULL DEFAULT '',
+        finished_ts TEXT NOT NULL DEFAULT '',
+        rounds_done INTEGER NOT NULL DEFAULT 0,
+        best_hold_s INTEGER NOT NULL DEFAULT 0,
+        source TEXT NOT NULL DEFAULT 'web',
+        note TEXT NOT NULL DEFAULT ''
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS points_ledger (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,
+        date TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (
+            kind IN ('practice', 'record', 'streak', 'habit', 'task', 'checkin', 'journal')
+        ),
+        ref_id TEXT NOT NULL,
+        points INTEGER NOT NULL DEFAULT 0,
+        reason TEXT NOT NULL DEFAULT '',
+        source TEXT NOT NULL DEFAULT 'app',
+        UNIQUE (kind, ref_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_practice_sessions_date ON practice_sessions(date)",
+    "CREATE INDEX IF NOT EXISTS idx_points_ledger_date ON points_ledger(date)",
+    "CREATE INDEX IF NOT EXISTS idx_points_ledger_ts ON points_ledger(ts)",
+)
+
+#: Колонки, которые досоздаются, если таблицы практик уже существуют в другой
+#: форме: бот (``app/bot/store_v4.py``) успел сделать ленивый DDL до этой
+#: миграции. ``ALTER TABLE ... ADD COLUMN`` с дефолтом не ломает чужие строки.
+_PRACTICES_COLUMNS: tuple[tuple[str, str, str], ...] = (
+    ("practices", "kind", "TEXT NOT NULL DEFAULT 'other'"),
+    ("practices", "description", "TEXT NOT NULL DEFAULT ''"),
+    ("practices", "steps_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("practices", "levels_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("practices", "safety_note", "TEXT NOT NULL DEFAULT ''"),
+    ("practices", "duration_s", "INTEGER NOT NULL DEFAULT 0"),
+    ("practices", "sort", "INTEGER NOT NULL DEFAULT 0"),
+    ("practices", "archived", "INTEGER NOT NULL DEFAULT 0"),
+    ("practices", "created", "TEXT NOT NULL DEFAULT ''"),
+    ("practice_sessions", "ts", "TEXT NOT NULL DEFAULT ''"),
+    ("practice_sessions", "started_ts", "TEXT NOT NULL DEFAULT ''"),
+    ("practice_sessions", "finished_ts", "TEXT NOT NULL DEFAULT ''"),
+    ("practice_sessions", "rounds_done", "INTEGER NOT NULL DEFAULT 0"),
+    ("practice_sessions", "best_hold_s", "INTEGER NOT NULL DEFAULT 0"),
+    ("practice_sessions", "note", "TEXT NOT NULL DEFAULT ''"),
+    ("points_ledger", "reason", "TEXT NOT NULL DEFAULT ''"),
+    ("points_ledger", "source", "TEXT NOT NULL DEFAULT 'app'"),
+)
+
+
+def ensure_practices(conn: sqlite3.Connection) -> None:
+    """Создаёт таблицы практик и очков на любой версии схемы (идемпотентно).
+
+    Три шага: ``CREATE TABLE IF NOT EXISTS``, досоздание недостающих колонок
+    (таблицы мог создать бот своей ленивой схемой) и уникальный индекс
+    «одна сессия на практику в день». Перед индексом дубли схлопываются:
+    остаётся последняя строка, иначе ``CREATE UNIQUE INDEX`` упал бы на
+    чужой базе и утащил за собой всю миграцию.
+    """
+    # ``with conn:`` обязателен: в этой базе ``isolation_level=""``, поэтому
+    # DELETE начинает неявную транзакцию, а следующий за ним CREATE INDEX
+    # попадает в неё. Без коммита SQLite откатывает транзакцию при закрытии
+    # соединения — и уникальный индекс молча исчезает (таблица и индексы из
+    # ``_PRACTICES_DDL`` при этом на месте: DDL сам по себе коммитится).
+    with conn:
+        for statement in _PRACTICES_DDL:
+            conn.execute(statement)
+        for table, column, ddl in _PRACTICES_COLUMNS:
+            _add_column_if_missing(conn, table, column, ddl)
+        _normalise_legacy_practice_kinds(conn)
+        conn.execute(
+            "DELETE FROM practice_sessions WHERE id NOT IN "
+            "(SELECT MAX(id) FROM practice_sessions GROUP BY practice_id, date)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_practice_sessions_day "
+            "ON practice_sessions(practice_id, date)"
+        )
+
+
+#: Значения ``practices.kind`` из ленивой схемы бота (до миграции №5).
+#: Их знает только старая база: CHECK новой схемы такие значения не пропустит,
+#: поэтому миграция приводит их к трём допустимым видам.
+_LEGACY_PRACTICE_KINDS: Mapping[str, str] = {
+    "breath": "breathing",
+    "breathing": "breathing",
+    "meditation": "other",
+    "body": "stretch",
+    "stretch": "stretch",
+    "other": "other",
+}
+
+
+def _normalise_legacy_practice_kinds(conn: sqlite3.Connection) -> int:
+    """Приводит ``practices.kind`` к видам новой схемы и возвращает число строк.
+
+    Таблицу практик мог создать бот своей ленивой схемой до миграции №5 —
+    тогда в ``kind`` лежат ``breath``/``meditation``/``body``. CHECK-ограничения
+    в такой таблице нет, поэтому строки живут, но каталог и фильтры новой
+    схемы о них спотыкаются. Один UPDATE чинит все значения сразу; на свежей
+    базе (с CHECK) он просто не находит строк.
+    """
+    cursor = conn.execute(
+        "UPDATE practices SET kind = CASE kind "
+        "WHEN 'breath' THEN 'breathing' "
+        "WHEN 'meditation' THEN 'other' "
+        "WHEN 'body' THEN 'stretch' "
+        "WHEN 'breathing' THEN 'breathing' "
+        "WHEN 'stretch' THEN 'stretch' "
+        "WHEN 'other' THEN 'other' "
+        "ELSE 'other' END "
+        "WHERE kind NOT IN ('breathing', 'stretch', 'other')"
+    )
+    return int(cursor.rowcount or 0)
+
+
+def _food_meal(meta: Mapping[str, Any], ts: str) -> str:
+    """Приём пищи из ``meta.meal`` (русская подпись) или по часу ``ts``."""
+    label = str(meta.get("meal") or "").strip().lower()
+    if label in _MEAL_BY_LABEL:
+        return _MEAL_BY_LABEL[label]
+    hour = 12
+    match = re.match(r"^\d{4}-\d{2}-\d{2}[T ](\d{2})", ts or "")
+    if match:
+        hour = int(match.group(1))
+    if hour < 11:
+        return "breakfast"
+    if hour < 16:
+        return "lunch"
+    if hour < 21:
+        return "dinner"
+    return "snack"
+
+
+def _move_legacy_food_entries(conn: sqlite3.Connection) -> int:
+    """Переносит ``entries.kind = 'food'`` в ``food_log`` и возвращает число строк.
+
+    Макросы берутся из ``meta_json`` (сидер писал ``kcal``/``protein_g``/
+    ``fat_g``/``carbs_g``), приём пищи — из ``meta.meal``, иначе по часу.
+    Строки с нечитаемым ``meta_json`` тоже не теряются: они уезжают в дневник
+    с нулевыми макросами и текстом записи. После переноса исходные строки
+    удаляются — еда больше не дублируется в журнале. ``source`` переносится
+    как есть (``demo``/``telegram``): по нему ``clear_demo`` отличает
+    демо-еду от пользовательской.
+    """
+    rows = conn.execute(
+        "SELECT id, ts, date, text, source, meta_json FROM entries WHERE kind = 'food'"
+    ).fetchall()
+    if not rows:
+        return 0
+    moved: list[tuple[Any, ...]] = []
+    for row in rows:
+        try:
+            meta = json.loads(row["meta_json"] or "{}")
+        except (TypeError, ValueError):
+            meta = {}
+        if not isinstance(meta, dict):
+            meta = {}
+        ts = str(row["ts"] or "")
+        moved.append(
+            (
+                str(row["date"] or ts[:10]),
+                ts,
+                _food_meal(meta, ts),
+                str(row["text"] or ""),
+                _LEGACY_FOOD_GRAMS,
+                float(meta.get("kcal") or 0),
+                float(meta.get("protein_g") or meta.get("protein") or 0),
+                float(meta.get("fat_g") or meta.get("fat") or 0),
+                float(meta.get("carbs_g") or meta.get("carbs") or 0),
+                float(meta.get("fiber_g") or 0),
+                float(meta.get("sugar_g") or 0),
+                # Источник сохраняем: по нему сидер отличает демо-еду от
+                # пользовательской при повторном заполнении демо-базы.
+                str(row["source"] or ""),
+            )
+        )
+    conn.executemany(
+        "INSERT INTO food_log(date, ts, meal, text, grams, kcal, protein, fat, carbs, "
+        "fiber, sugar, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        moved,
+    )
+    conn.execute("DELETE FROM entries WHERE kind = 'food'")
+    return len(moved)
+
+
+def _migration_4_nutrition(conn: sqlite3.Connection) -> None:
+    """v4: дневник питания плюс перенос старых ``entries.kind = 'food'``."""
+    for statement in _MIGRATION_4_DDL:
+        conn.execute(statement)
+    conn.execute(
+        "INSERT OR IGNORE INTO nutrition_targets"
+        "(id, kcal, protein, fat, carbs, fiber, sugar, water_ml, updated) "
+        "VALUES (1, ?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%SZ', 'now'))",
+        tuple(
+            DEFAULT_NUTRITION_TARGETS[key]
+            for key in ("kcal", "protein", "fat", "carbs", "fiber", "sugar", "water_ml")
+        ),
+    )
+    _move_legacy_food_entries(conn)
+
+
 #: Применённые миграции: версия -> SQL-инструкции или функция-миграция.
 MIGRATIONS: Mapping[int, tuple[str, ...] | Callable[[sqlite3.Connection], None]] = {
     1: _MIGRATION_1,
     2: _migration_2_jobs_meta,
     3: _migration_3_v4_schema,
+    4: _migration_4_nutrition,
 }
 
 
@@ -693,6 +1158,21 @@ def migrate(conn: sqlite3.Connection) -> int:
         )
     while version < SCHEMA_VERSION:
         version = _apply_migration(conn, version + 1)
+    # Таблица событий использования нужна и старым v4-базам: создаём её
+    # идемпотентно, не поднимая SCHEMA_VERSION (данные не мигрируют).
+    # Пустую «базу-заготовку» с заявленной версией не трогаем: migrate верит
+    # PRAGMA user_version и не должен дорисовывать схему (см. тесты).
+    has_schema = conn.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'"
+    ).fetchone()[0]
+    if int(has_schema or 0) > 0:
+        ensure_usage_events(conn)
+        # Интеграции веса (миграция №6) — та же природа: аддитивная таблица
+        # и три базовые записи, без переноса данных.
+        ensure_integrations(conn)
+        # Практики и очки (миграция №5) — той же природы: аддитивные таблицы,
+        # которые обязаны появиться и на базе, созданной прошлой версией.
+        ensure_practices(conn)
     return version
 
 

@@ -131,6 +131,24 @@ export const NUTRITION_ITEM: NavItem = {
   keywords: ['питание', 'калории', 'рацион', 'еда', 'nutrition'],
 };
 
+export const PRACTICES_ITEM: NavItem = {
+  path: '/practices',
+  label: 'Практики',
+  icon: 'stretch',
+  keywords: [
+    'практики',
+    'дыхание',
+    'вим хоф',
+    'задержка',
+    'растяжка',
+    'планка',
+    'холодный душ',
+    'очки',
+    'practices',
+    'breath',
+  ],
+};
+
 export const HABITS_ITEM: NavItem = {
   path: '/habits',
   label: 'Привычки',
@@ -183,6 +201,24 @@ export const ANALYTICS_ITEM: NavItem = {
   keywords: ['аналитика', 'корреляции', 'графики', 'динамика', 'analytics'],
 };
 
+export const USAGE_ITEM: NavItem = {
+  path: '/usage',
+  label: 'Статистика',
+  icon: 'trend-up',
+  keywords: [
+    'статистика',
+    'использование',
+    'покрытие',
+    'маршруты',
+    'события',
+    'темы',
+    'мысли',
+    'сколько времени',
+    'usage',
+    'stats',
+  ],
+};
+
 export const SETTINGS_ITEM: NavItem = {
   path: '/settings',
   label: 'Настройки',
@@ -211,6 +247,7 @@ export const HEALTH_GROUP: NavGroup = {
     BODY_ITEM,
     SLEEP_ITEM,
     WORKOUTS_ITEM,
+    PRACTICES_ITEM,
     NUTRITION_ITEM,
     HABITS_ITEM,
     MOOD_ITEM,
@@ -240,6 +277,7 @@ export const SIDEBAR_NAV: readonly SidebarNode[] = [
   { kind: 'item', item: FINANCE_ITEM },
   { kind: 'group', group: PERSONAL_GROUP },
   { kind: 'item', item: ANALYTICS_ITEM },
+  { kind: 'item', item: USAGE_ITEM },
 ];
 
 /** Разделы верхнего уровня — для поиска и шторки «Ещё». */
@@ -248,6 +286,7 @@ export const TOP_LEVEL_ITEMS: readonly NavItem[] = [
   COMPASS_ITEM,
   FINANCE_ITEM,
   ANALYTICS_ITEM,
+  USAGE_ITEM,
 ];
 
 /** Пять пунктов нижней навигации; шестой — «Ещё» со шторкой. */
@@ -268,6 +307,7 @@ export const ALL_NAV_ITEMS: readonly NavItem[] = [
   FINANCE_ITEM,
   ...PERSONAL_GROUP.items,
   ANALYTICS_ITEM,
+  USAGE_ITEM,
   SETTINGS_ITEM,
 ];
 

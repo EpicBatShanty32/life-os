@@ -344,11 +344,22 @@ class ActivityDay(ApiModel):
 
 
 class Insight(ApiModel):
-    """Инсайт аналитики с корреляцией."""
+    """Инсайт аналитики с корреляцией.
+
+    ``left``/``right``/``lag``/``r``/``n``/``q`` — машинная ссылка на находку
+    отчёта v2: по ним видно, что Обзор и Аналитика показывают одну и ту же
+    связь, а не два независимых расчёта.
+    """
 
     title: str
     text: str
     footnote: str = ""
+    left: str | None = None
+    right: str | None = None
+    lag: int | None = None
+    r: float | None = None
+    n: int | None = None
+    q: float | None = None
 
 
 SyncState = Literal["ok", "syncing", "error"]
@@ -387,6 +398,8 @@ class Overview(BaseModel):
     agenda: list[AgendaItem] = Field(default_factory=list)
     activity: list[ActivityDay] = Field(default_factory=list)
     insight: Insight | None = None
+    #: Топ-2 находки отчёта v2; ``insight`` — первая из них для совместимости.
+    insights: list[Insight] = Field(default_factory=list)
     sync: SyncStatus
     nav: NavBadges = Field(default_factory=NavBadges)
     generated_at: str | None = None

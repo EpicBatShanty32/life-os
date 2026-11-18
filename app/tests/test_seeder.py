@@ -275,24 +275,41 @@ def test_sleep_water_mood_energy(seeded: sqlite3.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_food_entries_have_macros(seeded: sqlite3.Connection) -> None:
-    """Питание: 2–4 записи в день, КБЖУ в meta_json, значения положительные."""
-    food = rows(seeded, "SELECT date, text, meta_json FROM entries WHERE kind = 'food'")
-    assert len(food) >= 240
-    per_day = rows(
+def test_diary_has_macros_and_products(seeded: sqlite3.Connection) -> None:
+    """Питание: 3–4 приёма в день, КБЖУ из продукта, 1800–2400 ккал в день."""
+    diary = rows(
         seeded,
-        "SELECT COUNT(*) FROM entries WHERE kind = 'food' GROUP BY date ORDER BY 1",
+        "SELECT date, meal, text, grams, kcal, protein, fat, carbs, product_id "
+        "FROM food_log ORDER BY date, ts",
     )
-    assert min(int(row[0]) for row in per_day) >= 2
-    assert max(int(row[0]) for row in per_day) <= 4
+    assert len(diary) >= 240
+    assert min(int(row[0]) for row in rows(
+        seeded, "SELECT COUNT(DISTINCT meal) FROM food_log GROUP BY date"
+    )) >= 3
+    assert max(int(row[0]) for row in rows(
+        seeded, "SELECT COUNT(DISTINCT meal) FROM food_log GROUP BY date"
+    )) <= 4
 
-    for _, text, raw in food:
-        meta = json.loads(raw)
-        assert set(meta) == {"meal", "kcal", "protein_g", "fat_g", "carbs_g"}
-        assert 40 <= meta["kcal"] <= 700
-        for key in ("protein_g", "fat_g", "carbs_g"):
-            assert 0 < meta[key] <= 80
-        assert text.startswith(("Завтрак:", "Обед:", "Ужин:", "Перекус:"))
+    days = rows(
+        seeded,
+        "SELECT date, ROUND(SUM(kcal)) FROM food_log GROUP BY date ORDER BY date",
+    )
+    assert 60 <= len(days) <= 90
+    for _, kcal in days:
+        assert 1800 <= float(kcal) <= 2400
+
+    for _, meal, text, grams, kcal, protein, fat, carbs, product_id in diary:
+        assert meal in ("breakfast", "lunch", "dinner", "snack")
+        assert text and grams > 0
+        assert 0 <= kcal <= 1500
+        assert 0 <= protein <= 200 and 0 <= fat <= 200 and 0 <= carbs <= 300
+        assert product_id is not None
+
+    # «Пищевых» записей в журнале больше нет — еда живёт в дневнике.
+    assert count(seeded, "entries", "kind = 'food'") == 0
+    # Продукты справочника — ~120 позиций, у всех КБЖУ непустые.
+    assert count(seeded, "products") >= 120
+    assert count(seeded, "products", "kcal <= 0") == 0
 
 
 def test_workouts_three_per_week_with_progress(seeded: sqlite3.Connection) -> None:

@@ -13,7 +13,7 @@
 
 Отсюда правила:
 1. **Docker-стек не запускаем** — файлы `deploy/` пишем и валидируем статически, в отчёте честно помечаем «не проверено, docker отсутствует».
-2. **Транскрибация** — интерфейс `Transcriber` с двумя реализациями: `WhisperTranscriber` (если установлен faster-whisper и ffmpeg) и `NullTranscriber` (возвращает статус `pending_toolchain`). Пайплайн не падает, а показывает в UI «нужен ffmpeg/whisper».
+2. **Транскрибация** — интерфейс `Transcriber` с тремя реализациями: `DisabledTranscriber` (движок выключен на устройстве, `transcribe.engine = "off"` — **значение по умолчанию на личном маке**), `WhisperTranscriber` (только при `engine = "local"` и установленных faster-whisper + ffmpeg) и `NullTranscriber` (`engine = "local"`, но toolchain неполный). Все три не роняют пайплайн: файл сохраняется, задача получает `pending_toolchain` с кодом `transcribe_disabled` или причиной «не хватает …». UI и бот отличают «выключено» от «не установлено».
 3. **Аналитика** — на stdlib (`statistics`, `sqlite3`); DuckDB не вводим.
 4. **Redis/очереди** — заменяем таблицей `jobs` в SQLite + воркер-процессом (простой цикл с `SELECT ... WHERE status='queued'`).
 5. **React** собираем Vite'ом, раздаём статикой из FastAPI (`app/web/dist`), сборка — `npm ci && npm run build` в `app/web`.

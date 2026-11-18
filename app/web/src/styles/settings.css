@@ -1,0 +1,239 @@
+/* ─────────────────────────────────────────────────────────────
+   Настройки → «Подключения»: источники веса, импорт файла, ручной ввод.
+   Только токены: цвета, радиусы, отступы и типографика из tokens.css.
+   Тёмная тема — те же правила, значения приходят из токенов.
+   ───────────────────────────────────────────────────────────── */
+
+.set-srcs {
+  display: flex;
+  flex-direction: column;
+}
+
+.set-srcs__loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+/* Строка источника: тумблер · текст · действие с отметкой синхронизации. */
+.set-src {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--sp-2) var(--sp-3);
+  padding: var(--sp-4) 0;
+  border-top: 1px solid var(--border);
+}
+
+.set-src:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.set-src__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.set-src__name {
+  color: var(--text);
+  font-size: var(--text-small-size);
+  font-weight: 600;
+  line-height: var(--text-small-line);
+}
+
+.set-src__hint {
+  color: var(--text-secondary);
+  font-size: var(--text-small-size);
+  line-height: var(--text-small-line);
+}
+
+.set-src[data-enabled='false'] .set-src__hint {
+  color: var(--text-tertiary);
+}
+
+.set-src__side {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+}
+
+.set-src__sync {
+  margin-top: 3px;
+  color: var(--text-tertiary);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+  white-space: nowrap;
+}
+
+.set-src__sync-value {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Инлайн-ошибка строки: не тост и не окно — текст под пояснением. */
+.set-src__error {
+  color: var(--danger);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+/* Файл выбирают нативным input, а вид у него — как у кнопки. */
+.set-src__file {
+  position: relative;
+  cursor: pointer;
+}
+
+.set-src__file:focus-within {
+  box-shadow: var(--focus-ring);
+}
+
+/* Выключенный источник: тот же вид кнопки, что у .ui-btn:disabled, плюс
+   подпись под пояснением — почему файл сейчас не выбрать. */
+.set-src__file[data-disabled='true'] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.set-src__input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.set-src__input:focus-visible {
+  box-shadow: none;
+}
+
+/* Тумблер: нативная кнопка с role="switch", рисуется токенами. */
+.set-sw {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 34px;
+  height: 20px;
+  margin-top: 1px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.set-sw__thumb {
+  display: block;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  /* Выключено: тёмная ручка на светлой дорожке. Разница состояний читается
+     по положению ручки и её контрасту (≥4.5:1 к дорожке), а не только по
+     цвету заливки — дорожка в покое слишком близка к фону карточки. */
+  background: var(--text-tertiary);
+  box-shadow: var(--shadow-xs);
+  transform: translateX(3px);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+/* Площадь нажатия не меньше 24×24 (WCAG 2.5.8): невидимая подложка вокруг
+   дорожки — сама дорожка рисованной остаётся 34×20. */
+.set-sw::after {
+  content: '';
+  position: absolute;
+  inset: -4px -5px;
+  border-radius: inherit;
+}
+
+.set-sw[aria-checked='true'] {
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-strong);
+}
+
+.set-sw[aria-checked='true'] .set-sw__thumb {
+  background: var(--on-accent);
+  box-shadow: none;
+  transform: translateX(17px);
+}
+
+/* Пока запрос в полёте — состояние меняется, но тумблер не «врёт» скачком. */
+.set-sw[data-pending='true'] {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+/* Кольцо фокуса: свой box-shadow тумблера перебивает общее правило base.css,
+   поэтому фокус с клавиатуры продублирован здесь явно. */
+.set-sw:focus-visible,
+.set-sw[aria-checked='true']:focus-visible {
+  box-shadow: var(--focus-ring);
+}
+
+/* Ручной ввод: дата, вес, «Добавить» — под пояснением строки. */
+.set-manual {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+
+.set-manual .ui-field {
+  width: 132px;
+}
+
+.set-manual__weight {
+  width: 104px;
+}
+
+.set-manual__actions {
+  display: flex;
+  align-items: flex-end;
+}
+
+/* Честное пояснение под строками: одна короткая мысль, мелким кеглем. */
+.set-srcs__note {
+  margin-top: var(--sp-4);
+  padding-top: var(--sp-3);
+  border-top: 1px solid var(--border);
+  color: var(--text-tertiary);
+  font-size: var(--text-caption-size);
+  line-height: var(--text-caption-line);
+}
+
+@media (max-width: 640px) {
+  .set-src {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .set-src__side {
+    grid-column: 1 / -1;
+    align-items: stretch;
+  }
+
+  .set-src__side .ui-btn,
+  .set-src__side .set-src__file {
+    justify-content: center;
+    width: 100%;
+  }
+
+  .set-src__sync {
+    white-space: normal;
+  }
+
+  .set-manual,
+  .set-manual .ui-field,
+  .set-manual .set-manual__weight {
+    width: 100%;
+  }
+
+  .set-manual__actions,
+  .set-manual__actions .ui-btn {
+    width: 100%;
+  }
+}

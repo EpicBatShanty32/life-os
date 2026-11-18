@@ -1,12 +1,16 @@
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import { startUsageTracker } from './lib/usageTracker';
 import './styles/tokens.css';
 import './styles/base.css';
 import './styles/ui.css';
 import './styles/layout.css';
 import './styles/pages.css';
 import './styles/overview.css';
+
+// Локальный трекер: время на экране, переходы и лента визитов (lib/usageTracker).
+startUsageTracker();
 
 const container = document.getElementById('root');
 

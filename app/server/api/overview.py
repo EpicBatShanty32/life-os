@@ -16,14 +16,16 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 from fastapi import APIRouter
 
 from app.server.api.aggregates import (
+    SERIES_LABELS,
     TRAINING_KINDS,
     WATER_KINDS,
-    build_correlations,
+    build_correlation_report,
     entry_daily_counts,
     entry_daily_minutes,
     latest_metric,
@@ -63,6 +65,11 @@ CHECKINS_TOTAL = 6
 ACTIVITY_DAYS = 7
 WEIGHT_SERIES_DAYS = 14
 AGENDA_LIMIT = 6
+#: Окно и лаги Обзора совпадают с Аналитикой — иначе экраны разойдутся.
+OVERVIEW_DAYS = 90
+OVERVIEW_LAGS = 2
+#: Сколько находок v2 отдаём на Обзор (первая — в поле ``insight``).
+OVERVIEW_FINDINGS = 2
 
 
 @router.get("/overview")
@@ -78,6 +85,7 @@ def build_overview(conn, settings) -> Overview:
 
     streak, best_streak = _streak(conn, today)
     completed_checkins = min(_entries_today(conn, today_text), CHECKINS_TOTAL)
+    insights = _overview_insights(conn, today)
 
     preferences = {
         "water_goal_ml": pref_int(conn, "water_goal_ml"),
@@ -103,7 +111,8 @@ def build_overview(conn, settings) -> Overview:
         course=_continue_course(conn),
         agenda=_agenda(conn, today_text),
         activity=_activity(conn, today),
-        insight=_insight(conn, today),
+        insight=insights[0] if insights else None,
+        insights=insights,
         sync=_sync_status(conn, settings),
         nav=_nav(conn, today_text),
     )
@@ -368,34 +377,126 @@ def _activity(conn, today: date) -> list[ActivityDay]:
     return result
 
 
-def _insight(conn, today: date) -> Insight | None:
-    pairs = build_correlations(conn, today, days=90)
-    for item in pairs:
-        if item["status"] != "ok":
-            continue
-        return Insight(
-            title="%s → %s" % (item["left_label"], item["right_label"]),
-            text=str(item["sentence"]),
-            footnote="Корреляция r = %.2f · n = %d" % (item["r"], item["n"]),
-        )
-    # Данные есть, но связь слабее порога: это не «мало данных», и молчать об
-    # этом нельзя — показываем самую заметную пару и честный коэффициент.
-    weak = [
-        item
-        for item in pairs
-        if item["status"] == "weak" and isinstance(item.get("r"), (int, float))
-    ]
-    if not weak:
-        return None
-    best = max(weak, key=lambda item: abs(float(item["r"])))
-    return Insight(
-        title="%s ↔ %s" % (best["left_label"], best["right_label"]),
-        text=(
-            "%s. Пока связь слабее порога — вывод появится, когда |r| станет ≥ 0,3."
-            % (best["sentence"] or "Связь между показателями пока неустойчива")
-        ),
-        footnote="r = %.2f · n = %d · порог |r| ≥ 0,3" % (best["r"], best["n"]),
+def _ru_number(value: float | None, digits: int = 2) -> str:
+    """Число для подписи: русская запятая и знак корреляции.
+
+    Округление — половина вверх от десятичного представления, как у браузера
+    (``Intl.NumberFormat``): иначе на одном и том же r = 0,495 Обзор писал
+    «+0,49», а Аналитика — «0,50», и экраны расходились в последней цифре.
+    """
+    if value is None:
+        return "—"
+    quantum = Decimal(1).scaleb(-digits)
+    text = format(
+        Decimal(str(float(value))).quantize(quantum, rounding=ROUND_HALF_UP), "f"
     )
+    if not text.startswith("-"):
+        text = "+" + text
+    return text.replace(".", ",")
+
+
+def _q_text(q: float | None) -> str:
+    """q-value в подписи: маленькое значение не округляем до нуля."""
+    if q is None:
+        return ""
+    if q < 0.001:
+        return "q < 0,001"
+    digits = 4 if q < 0.01 else 3
+    return ("q = %.*f" % (digits, float(q))).replace(".", ",")
+
+
+def _insight_from_finding(item: dict[str, Any]) -> Insight:
+    """Находка v2 → карточка Обзора; формулировка приходит из отчёта как есть."""
+    r = item.get("r")
+    q = item.get("q")
+    footnote = "r = %s · n = %d" % (_ru_number(r), int(item["n"]))
+    q_text = _q_text(q)
+    if q_text:
+        footnote += " · " + q_text
+    return Insight(
+        title=str(item["title"]),
+        text=str(item["text"]),
+        footnote=footnote,
+        left=str(item["left"]),
+        right=str(item["right"]),
+        lag=int(item["lag"]),
+        r=float(r) if r is not None else None,
+        n=int(item["n"]),
+        q=float(q) if q is not None else None,
+    )
+
+
+def _overview_insights(conn, today: date) -> list[Insight]:
+    """Топ-2 находки того же отчёта v2, что показывает Аналитика.
+
+    Порог |r| ≥ 0,3 и отдельный расчёт lag=0 больше не используются: иначе
+    Обзор говорил «связи нет» там, где Аналитика находила отложенную связь.
+    Если отчёт не нашёл ничего, честно показываем самую заметную посчитанную
+    пару и предупреждаем, что она не прошла контроль ложных находок.
+    """
+    report = build_correlation_report(
+        conn, today, days=OVERVIEW_DAYS, lags=OVERVIEW_LAGS
+    )
+    found = report["found"][:OVERVIEW_FINDINGS]
+    if found:
+        return [_insight_from_finding(item) for item in found]
+
+    computed = [item for item in report["pairs"] if item.get("r") is not None]
+    if not computed:
+        return _not_ready_insight(report.get("notReady") or [])
+    best = computed[0]
+    return [
+        Insight(
+            title=str(best["title"]),
+            text=(
+                "Связь пока не прошла проверку на ложные находки: вывод появится, "
+                "когда данных станет больше."
+            ),
+            footnote="r = %s · n = %d · проверка на ложные находки не пройдена"
+            % (_ru_number(best["r"]), int(best["n"])),
+            left=str(best["left"]),
+            right=str(best["right"]),
+            lag=int(best["lag"]),
+            r=float(best["r"]),
+            n=int(best["n"]),
+            q=None,
+        )
+    ]
+
+
+def _not_ready_insight(not_ready: list[dict[str, Any]]) -> list[Insight]:
+    """Честный отказ вместо устаревшего «|r| ≥ 0,3» из пустого состояния SPA."""
+    if not_ready:
+        item = not_ready[0]
+        left = str(item.get("left") or "")
+        right = str(item.get("right") or "")
+        label_left = SERIES_LABELS.get(left, left)
+        label_right = SERIES_LABELS.get(right, right)
+        if item.get("reason") == "no_variance":
+            return [
+                Insight(
+                    title="Показатель не меняется",
+                    text="Значения всё время одинаковы — корреляцию не посчитать.",
+                    footnote="",
+                    left=left or None,
+                    right=right or None,
+                )
+            ]
+        have = int(item.get("daysHave") or 0)
+        need = int(item.get("needDays") or 14)
+        return [
+            Insight(
+                title="Пока мало данных",
+                text=(
+                    "Для связи «%s» и «%s» нужно не меньше %d реальных дней: сейчас %d."
+                    % (label_left, label_right, need, have)
+                ),
+                footnote="нужно ещё %d дн." % max(0, need - have),
+                left=left or None,
+                right=right or None,
+            )
+        ]
+    return []
 
 
 def _sync_status(conn, settings) -> SyncStatus:

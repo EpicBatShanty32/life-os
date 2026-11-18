@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.server.api import analytics, analytics_summary, compass, courses, export, finance, health, journal, library, overview, personal, quick, search, sections, tasks
+from app.server.api import analytics, analytics_summary, compass, courses, export, finance, findings, health, integrations, journal, library, nutrition, overview, personal, practices, quick, search, sections, tasks, usage
 from app.server.api import settings as settings_api
 
 __all__ = ["api_routers"]
@@ -19,6 +19,7 @@ def api_routers() -> tuple[APIRouter, ...]:
     """Роутеры API в порядке регистрации (специфичные — раньше общих)."""
     return (
         health.router,
+        integrations.router,
         overview.router,
         journal.router,
         quick.router,
@@ -27,11 +28,15 @@ def api_routers() -> tuple[APIRouter, ...]:
         finance.router,
         compass.router,
         tasks.router,
+        nutrition.router,
+        practices.router,
         personal.router,
         analytics_summary.router,
+        findings.router,
         search.router,
         export.router,
         sections.router,
         analytics.router,
+        usage.router,
         settings_api.router,
     )

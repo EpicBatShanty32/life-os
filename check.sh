@@ -135,14 +135,17 @@ check_no_secrets() {
 
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    grep -HnE 'sk-[A-Za-z0-9_-]{16,}' "$f" >> "$hits" 2>/dev/null || true
+    # Слева должен быть не-словесный символ: иначе идентификаторы сценариев
+    # с префиксом sk- в тестах ложно считаются ключом.
+    grep -HnE '(^|[^A-Za-z0-9_-])sk-[A-Za-z0-9_-]{16,}' "$f" >> "$hits" 2>/dev/null || true
   done < "$list"
 
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     grep -HnE '[0-9]{8,10}:[A-Za-z0-9_-]{30,}' "$f" >> "$tokens" 2>/dev/null || true
   done < "$list"
-  grep -vE '[Xx]{8,}' "$tokens" >> "$hits" 2>/dev/null || true
+  # Плейсхолдер из документации Telegram и такой же в тестах — не секрет.
+  grep -vE '[Xx]{8,}|123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw' "$tokens" >> "$hits" 2>/dev/null || true
 
   if [ -s "$hits" ]; then
     echo "найдены секреты (файл:строка):"

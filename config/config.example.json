@@ -19,7 +19,16 @@
     "model": "deepseek-v4.1-flash-1017",
     "api_key": "",
     "timeout": 60,
-    "max_followups": 2
+    "max_followups": 2,
+    "reasoning_effort": "xhigh",
+    "parse_effort": "medium",
+    "answer_effort": "xhigh",
+    "parse_timeout": 8,
+    "answer_timeout": 25
+  },
+  "transcribe": {
+    "engine": "off",
+    "language": "ru"
   },
   "schedule": {
     "morning": {
@@ -50,6 +59,9 @@
     "timezone": "Europe/Moscow",
     "lang": "ru",
     "onboarding": true,
-    "quiet_hours": ["23:00", "08:00"]
+    "quiet_hours": [
+      "23:00",
+      "08:00"
+    ]
   }
 }

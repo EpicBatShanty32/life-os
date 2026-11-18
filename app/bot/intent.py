@@ -123,6 +123,9 @@ class OpenAICompatibleGateway:
     повтор. Таймаут ограничен сверху 30 секундами, чтобы не вешать бота.
     """
 
+    #: Допустимые подсказки об усилии рассуждения (как в OpenAI/DeepSeek API).
+    EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
+
     def __init__(
         self,
         base_url: str = DEFAULT_BASE_URL,
@@ -130,15 +133,19 @@ class OpenAICompatibleGateway:
         model: str = DEFAULT_MODEL,
         timeout: float = DEFAULT_TIMEOUT,
         enabled: bool = True,
+        reasoning_effort: str = "",
     ) -> None:
         self.base_url = str(base_url or "").strip().rstrip("/")
         self.api_key = str(api_key or "").strip()
         self.model = str(model or DEFAULT_MODEL).strip() or DEFAULT_MODEL
         self.enabled = bool(enabled)
+        self.reasoning_effort = self._effort(reasoning_effort)
         try:
             self.timeout = min(max(float(timeout), 1.0), 30.0)
         except (TypeError, ValueError):
             self.timeout = DEFAULT_TIMEOUT
+        #: Провайдер понимает поле ``reasoning``; после HTTP 400 — выключаем.
+        self.reasoning_supported = True
         self.last_error = ""
         self.last_status = None
 
@@ -151,10 +158,18 @@ class OpenAICompatibleGateway:
             self.available(),
         )
 
+    @classmethod
+    def _effort(cls, value: Any) -> str:
+        """Нормализует ``reasoning_effort``; неизвестное значение — пусто."""
+        text = str(value or "").strip().casefold()
+        return text if text in cls.EFFORTS else ""
+
     def json_chat(
         self,
         messages: List[Dict[str, str]],
         max_tokens: int = 700,
+        reasoning_effort: Optional[str] = None,
+        timeout: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         self.last_error = ""
         self.last_status = None
@@ -168,6 +183,10 @@ class OpenAICompatibleGateway:
             "temperature": 0.2,
             "max_tokens": max(1, min(int(max_tokens), 2000)),
         }
+        effort = self._effort(reasoning_effort) if reasoning_effort is not None else self.reasoning_effort
+        if effort and self.reasoning_supported:
+            # Стандартное поле OpenAI: «сколько думать» перед ответом.
+            payload["reasoning"] = {"effort": effort}
         try:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         except (TypeError, ValueError):
@@ -180,15 +199,36 @@ class OpenAICompatibleGateway:
             "Authorization": "Bearer " + self.api_key,
         }
         url = self.base_url + "/chat/completions"
+        try:
+            call_timeout = min(max(float(timeout), 1.0), 30.0) if timeout is not None else self.timeout
+        except (TypeError, ValueError):
+            call_timeout = self.timeout
+        reasoning_retry = False
 
         for attempt in range(1, 3):
             request = urllib.request.Request(url, data=body, headers=headers, method="POST")
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                with urllib.request.urlopen(request, timeout=call_timeout) as response:
                     raw = response.read()
             except urllib.error.HTTPError as exc:
                 self.last_status = exc.code
                 self.last_error = "http_%s" % exc.code
+                if exc.code == 400 and "reasoning" in payload and not reasoning_retry:
+                    # Провайдер не знает поле reasoning: один повтор без него.
+                    # Запоминаем на процесс, чтобы не платить за 400 каждый раз.
+                    reasoning_retry = True
+                    self.reasoning_supported = False
+                    logger.warning(
+                        "LLM: провайдер не принял reasoning=%s (HTTP 400) — "
+                        "повторяю без подсказки", effort
+                    )
+                    payload.pop("reasoning", None)
+                    try:
+                        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                    except (TypeError, ValueError):
+                        self.last_error = "bad_payload"
+                        return None
+                    continue
                 if exc.code == 429 and attempt == 1:
                     wait = _retry_after(getattr(exc, "headers", None))
                     logger.warning("LLM: HTTP 429, повтор через %.1f c", wait)

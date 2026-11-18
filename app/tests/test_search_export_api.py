@@ -234,7 +234,7 @@ def test_export_json(client: TestClient, settings) -> None:
     assert "application/json" in response.headers["content-type"]
 
     payload = json.loads(response.text)
-    assert payload["app"]["schemaVersion"] == 3
+    assert payload["app"]["schemaVersion"] == 4
     assert payload["app"]["name"] == "Life OS"
     assert payload["exportedAt"]
     assert payload["preferences"]["water_goal_ml"] == 2000

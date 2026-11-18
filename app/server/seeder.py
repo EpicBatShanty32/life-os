@@ -12,6 +12,11 @@
 * **идемпотентность** — :func:`seed` сначала удаляет прошлый демо-набор
   (:func:`clear_demo`), затем пишет новый, поэтому повторный запуск не
   дублирует строки;
+* **правдоподобные связи** — демо-дни связаны друг с другом так, как это
+  бывает у человека: тренировка улучшает сон, сон поднимает энергию и
+  настроение следующего дня, дорогой день снижает настроение. Связи с шумом
+  (r ≈ 0.3–0.6), поэтому движок корреляций находит на демо-базе 2–4 настоящие
+  находки, а не идеальные линии (см. блок ``DEMO_*`` про зависимости дня);
 * **демо-строки помечены** — у ``entries``/``metrics``/``transactions`` это
   ``source='demo'``; у сфер, привычек, целей, проектов, задач, книг, счетов
   и категорий — известные имена из констант модуля; у чек-инов — точная
@@ -42,11 +47,19 @@ import sqlite3
 import sys
 from dataclasses import dataclass
 from datetime import date as _date
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
-from app.server.db import LegacySchemaError, connect, migrate
+from app.server.db import (
+    LegacySchemaError,
+    connect,
+    ensure_integrations,
+    ensure_practices,
+    migrate,
+)
+from app.server.practices import award as award_points
+from app.server.practices import ensure_practice_catalog, save_practice_session
 
 __all__ = [
     "DEMO_ACCOUNT_NAMES",
@@ -65,8 +78,11 @@ __all__ = [
     "DEMO_GOAL_TITLES",
     "DEMO_HABIT_NAMES",
     "DEMO_INBOX_TEXTS",
+    "DEMO_PRACTICES",
     "DEMO_PROJECTS",
     "DEMO_PROJECT_NAMES",
+    "DEMO_PRODUCTS",
+    "DEMO_PRODUCT_NAMES",
     "DEMO_PROJECT_NOTES",
     "DEMO_REVIEW_TEXTS",
     "DEMO_SOURCE",
@@ -76,6 +92,7 @@ __all__ = [
     "DEMO_TASK_TITLES",
     "DEFAULT_DAYS",
     "DEFAULT_SEED",
+    "DIARY_DAYS",
     "SeedStats",
     "clear_demo",
     "main",
@@ -101,6 +118,232 @@ DEMO_HABITS: tuple[tuple[str, str, int], ...] = (
 )
 
 DEMO_HABIT_NAMES: tuple[str, ...] = tuple(name for name, _, _ in DEMO_HABITS)
+
+#: Демо-сессии практик: слаг, час дня, раунды, лучшая задержка (секунды).
+#: Задержки Вим Хофа растут по ходу истории — так видны рекорды и бонусы за
+#: них. Все сессии в прошлом (последняя — вчера): сегодняшний день остаётся
+#: свободным, чтобы первая живая практика владельца получила очки, а не
+#: утонула в демо-капе. Даты раскладываются через ``_build_practices`` по
+#: окну 90 дней, поэтому «30 сессий за 90 дней» держится при ``--days 120``.
+DEMO_PRACTICES: tuple[tuple[str, int, int, int], ...] = (
+    ("wim-hof", 8, 3, 60),
+    ("breath-478", 22, 4, 0),
+    ("stretch-7", 21, 1, 0),
+    ("box-breathing", 9, 6, 0),
+    ("breath-55", 23, 10, 0),
+    ("wim-hof", 8, 3, 75),
+    ("breath-478", 22, 4, 0),
+    ("cold-shower-60", 8, 1, 0),
+    ("stretch-7", 21, 1, 0),
+    ("box-breathing", 9, 8, 0),
+    ("breath-478", 22, 4, 0),
+    ("wim-hof", 8, 3, 90),
+    ("breath-55", 23, 10, 0),
+    ("stretch-7", 21, 1, 0),
+    ("breath-478", 22, 4, 0),
+    ("box-breathing", 9, 8, 0),
+    ("wim-hof", 8, 3, 105),
+    ("breath-478", 22, 6, 0),
+    ("cold-shower-60", 8, 1, 0),
+    ("stretch-7", 21, 1, 0),
+    ("breath-478", 22, 4, 0),
+    ("wim-hof", 8, 3, 120),
+    ("box-breathing", 9, 10, 0),
+    ("breath-55", 23, 18, 0),
+    ("breath-478", 22, 6, 0),
+    ("stretch-7", 21, 1, 0),
+    ("wim-hof", 8, 3, 150),
+    ("breath-478", 22, 4, 0),
+    ("box-breathing", 9, 8, 0),
+    ("stretch-7", 21, 1, 0),
+)
+
+#: Сколько демо-сессий должно получиться при окне в 90 дней.
+DEMO_PRACTICE_SESSIONS = len(DEMO_PRACTICES)
+
+
+@dataclass(frozen=True)
+class DemoProduct:
+    """Продукт справочника: КБЖУ на 100 г и группа для сборки меню."""
+
+    name: str
+    group: str
+    kcal: float
+    protein: float
+    fat: float
+    carbs: float
+    fiber: float = 0.0
+    sugar: float = 0.0
+    brand: str = ""
+
+
+#: Справочник продуктов демо-базы: реальные позиции с КБЖУ на 100 г.
+#: ``group`` нужен только сидеру — из него собирается правдоподобное меню
+#: (крупы/мясо/рыба/овощи/фрукты/…), в API группа не отдаётся.
+DEMO_PRODUCTS: tuple[DemoProduct, ...] = (
+    # Крупы и макароны (сухой вес).
+    DemoProduct("Гречка ядрица", "grain", 343, 12.6, 3.3, 57.1, 10.0, 0.0, "Мистраль"),
+    DemoProduct("Овсяные хлопья", "grain", 352, 12.3, 6.1, 59.5, 8.0, 1.0, "Русский продукт"),
+    DemoProduct("Рис басмати", "grain", 349, 7.4, 0.6, 76.5, 1.6, 0.1, "Мистраль"),
+    DemoProduct("Булгур", "grain", 342, 12.3, 1.3, 63.4, 12.5, 0.2, "Макфа"),
+    DemoProduct("Кускус", "grain", 376, 12.8, 0.6, 69.7, 5.0, 0.5, "Макфа"),
+    DemoProduct("Киноа", "grain", 368, 14.1, 6.1, 57.2, 7.0, 0.0, "Мистраль"),
+    DemoProduct("Макароны из твёрдых сортов", "grain", 359, 12.0, 1.5, 71.5, 3.0, 3.2, "Barilla"),
+    DemoProduct("Пшено", "grain", 348, 11.5, 3.3, 66.5, 3.6, 0.9, "Мистраль"),
+    DemoProduct("Перловка", "grain", 320, 9.3, 1.1, 66.0, 8.0, 0.9, "Мистраль"),
+    DemoProduct("Хлопья овсяные быстрые", "grain", 366, 11.0, 6.2, 61.8, 6.0, 2.0, "Ясно солнышко"),
+    # Хлеб.
+    DemoProduct("Хлеб бородинский", "bread", 208, 6.6, 1.3, 40.0, 4.0, 2.7, "БКХ"),
+    DemoProduct("Хлеб цельнозерновой", "bread", 229, 8.5, 3.0, 40.0, 4.7, 2.0, "Хлебный дом"),
+    DemoProduct("Батон нарезной", "bread", 273, 7.5, 3.5, 51.0, 2.3, 5.0, "Хлебный дом"),
+    DemoProduct("Лаваш тонкий", "bread", 290, 9.0, 1.5, 59.0, 2.0, 2.0, "Армянский"),
+    DemoProduct("Хлебцы ржаные", "bread", 334, 10.0, 2.0, 65.0, 15.0, 1.5, "Finn Crisp"),
+    DemoProduct("Багет французский", "bread", 274, 8.0, 2.5, 52.0, 2.5, 3.0, "Хлебный дом"),
+    # Мясо и птица.
+    DemoProduct("Куриная грудка", "meat", 113, 23.6, 1.9, 0.4, 0.0, 0.0, "Петухов"),
+    DemoProduct("Куриное бедро", "meat", 158, 19.5, 8.5, 0.0, 0.0, 0.0, "Петухов"),
+    DemoProduct("Индейка филе", "meat", 104, 22.5, 1.5, 0.0, 0.0, 0.0, "Дамате"),
+    DemoProduct("Говядина лопатка", "meat", 187, 19.0, 12.5, 0.0, 0.0, 0.0, "Мираторг"),
+    DemoProduct("Говяжий фарш 10%", "meat", 184, 18.5, 12.0, 0.0, 0.0, 0.0, "Мираторг"),
+    DemoProduct("Свинина шея", "meat", 264, 16.0, 22.0, 0.0, 0.0, 0.0, "Мираторг"),
+    DemoProduct("Телятина", "meat", 108, 20.0, 2.5, 0.0, 0.0, 0.0, "Мираторг"),
+    DemoProduct("Печень куриная", "meat", 137, 19.5, 5.6, 0.7, 0.0, 0.0, "Петухов"),
+    DemoProduct("Колбаса докторская", "meat", 257, 12.8, 22.2, 1.5, 0.0, 1.0, "Вязанка"),
+    DemoProduct("Бекон сырокопчёный", "meat", 470, 15.0, 45.0, 0.5, 0.0, 0.0, "Велком"),
+    DemoProduct("Ростбиф", "meat", 148, 24.0, 5.5, 0.0, 0.0, 0.0, "Велком"),
+    DemoProduct("Фарш индейки", "meat", 141, 18.0, 7.0, 0.0, 0.0, 0.0, "Дамате"),
+    # Рыба и морепродукты.
+    DemoProduct("Лосось филе", "fish", 197, 20.5, 12.5, 0.0, 0.0, 0.0, "Русское море"),
+    DemoProduct("Треска филе", "fish", 82, 17.8, 0.7, 0.0, 0.0, 0.0, "Русское море"),
+    DemoProduct("Тунец в собственном соку", "fish", 96, 21.0, 1.0, 0.0, 0.0, 0.0, "Доброфлот"),
+    DemoProduct("Скумбрия", "fish", 191, 18.0, 13.2, 0.0, 0.0, 0.0, "Русское море"),
+    DemoProduct("Сельдь солёная", "fish", 217, 17.0, 16.0, 0.0, 0.0, 0.0, "Меридиан"),
+    DemoProduct("Тилапия", "fish", 96, 20.1, 1.7, 0.0, 0.0, 0.0, "Русское море"),
+    DemoProduct("Судак", "fish", 84, 18.4, 0.8, 0.0, 0.0, 0.0, "Русское море"),
+    DemoProduct("Креветки", "fish", 99, 18.0, 2.0, 0.0, 0.0, 0.0, "Морозко"),
+    DemoProduct("Кальмар", "fish", 92, 18.0, 2.0, 0.0, 0.0, 0.0, "Морозко"),
+    DemoProduct("Минтай", "fish", 72, 16.0, 0.9, 0.0, 0.0, 0.0, "Русское море"),
+    # Яйца.
+    DemoProduct("Яйцо куриное", "egg", 143, 12.6, 9.5, 0.7, 0.0, 0.7, "Волжанин"),
+    DemoProduct("Яичный белок", "egg", 52, 11.1, 0.2, 0.7, 0.0, 0.7, "Волжанин"),
+    DemoProduct("Перепелиное яйцо", "egg", 168, 11.9, 13.1, 0.6, 0.0, 0.6, "Русский перепел"),
+    # Молочное.
+    DemoProduct("Молоко 2,5%", "dairy", 52, 2.9, 2.5, 4.7, 0.0, 4.7, "Простоквашино"),
+    DemoProduct("Кефир 1%", "dairy", 40, 3.0, 1.0, 4.0, 0.0, 4.0, "Простоквашино"),
+    DemoProduct("Творог 5%", "dairy", 121, 17.0, 5.0, 1.8, 0.0, 1.8, "Простоквашино"),
+    DemoProduct("Греческий йогурт", "dairy", 66, 9.0, 2.0, 3.0, 0.0, 3.0, "Epica"),
+    DemoProduct("Сметана 15%", "dairy", 158, 2.6, 15.0, 3.0, 0.0, 3.0, "Простоквашино"),
+    DemoProduct("Сыр российский", "dairy", 364, 24.0, 29.0, 0.0, 0.0, 0.0, "Белебеевский"),
+    DemoProduct("Сыр творожный", "dairy", 270, 6.0, 27.0, 2.5, 0.0, 2.5, "Hochland"),
+    DemoProduct("Моцарелла", "dairy", 240, 18.0, 18.0, 1.5, 0.0, 1.5, "Мираторг"),
+    DemoProduct("Ряженка 4%", "dairy", 67, 2.8, 4.0, 4.7, 0.0, 4.5, "Простоквашино"),
+    DemoProduct("Молоко миндальное", "dairy", 24, 0.5, 1.6, 2.0, 0.3, 1.5, "Nemoloko"),
+    # Овощи.
+    DemoProduct("Огурец", "veg", 15, 0.8, 0.1, 2.8, 1.0, 1.9, "Агро-Альянс"),
+    DemoProduct("Помидор", "veg", 20, 1.1, 0.2, 3.7, 1.2, 2.6, "Агро-Альянс"),
+    DemoProduct("Брокколи", "veg", 34, 2.8, 0.4, 6.6, 2.6, 1.7, "Гринлайн"),
+    DemoProduct("Цветная капуста", "veg", 25, 1.9, 0.3, 5.0, 2.0, 1.9),
+    DemoProduct("Кабачок", "veg", 17, 1.2, 0.3, 3.1, 1.0, 2.5),
+    DemoProduct("Баклажан", "veg", 25, 1.0, 0.2, 5.5, 3.0, 3.5),
+    DemoProduct("Морковь", "veg", 41, 0.9, 0.2, 9.6, 2.8, 7.2),
+    DemoProduct("Свёкла", "veg", 43, 1.6, 0.2, 9.6, 2.8, 7.0),
+    DemoProduct("Капуста белокочанная", "veg", 25, 1.3, 0.1, 5.8, 2.0, 3.2),
+    DemoProduct("Перец болгарский", "veg", 31, 1.0, 0.3, 6.0, 2.1, 4.2),
+    DemoProduct("Лук репчатый", "veg", 40, 1.1, 0.4, 9.3, 1.7, 4.7),
+    DemoProduct("Шпинат", "veg", 23, 2.9, 0.4, 3.6, 2.2, 0.4),
+    DemoProduct("Салат листовой", "veg", 15, 1.4, 0.2, 2.9, 1.3, 0.8),
+    DemoProduct("Картофель", "veg", 77, 2.0, 0.1, 17.0, 2.2, 0.8),
+    DemoProduct("Тыква", "veg", 26, 1.0, 0.1, 6.5, 0.5, 2.8),
+    DemoProduct("Шампиньоны", "veg", 27, 4.3, 1.0, 0.1, 1.0, 0.0),
+    DemoProduct("Горошек зелёный", "veg", 81, 5.4, 0.4, 14.0, 5.0, 5.0),
+    DemoProduct("Кукуруза", "veg", 86, 3.3, 1.4, 19.0, 2.7, 6.0),
+    # Фрукты и ягоды.
+    DemoProduct("Яблоко", "fruit", 52, 0.3, 0.2, 14.0, 2.4, 10.4),
+    DemoProduct("Банан", "fruit", 96, 1.5, 0.3, 22.0, 2.6, 12.2),
+    DemoProduct("Груша", "fruit", 57, 0.4, 0.1, 15.0, 3.1, 9.8),
+    DemoProduct("Апельсин", "fruit", 47, 0.9, 0.1, 11.8, 2.4, 9.4),
+    DemoProduct("Мандарин", "fruit", 53, 0.8, 0.3, 13.3, 1.8, 10.6),
+    DemoProduct("Киви", "fruit", 61, 1.1, 0.5, 14.7, 3.0, 9.0),
+    DemoProduct("Черника", "fruit", 57, 0.7, 0.3, 14.5, 2.4, 10.0),
+    DemoProduct("Малина", "fruit", 52, 1.2, 0.7, 11.9, 6.5, 4.4),
+    DemoProduct("Клубника", "fruit", 33, 0.7, 0.3, 7.7, 2.0, 4.9),
+    DemoProduct("Виноград", "fruit", 69, 0.7, 0.2, 17.0, 0.9, 15.5),
+    DemoProduct("Гранат", "fruit", 83, 1.7, 1.2, 18.7, 4.0, 13.9),
+    DemoProduct("Хурма", "fruit", 127, 0.5, 0.3, 33.5, 3.6, 12.5),
+    DemoProduct("Лимон", "fruit", 29, 1.1, 0.3, 9.3, 2.8, 2.5),
+    DemoProduct("Авокадо", "fruit", 160, 2.0, 14.7, 8.5, 6.7, 0.7),
+    DemoProduct("Персик", "fruit", 39, 0.9, 0.3, 9.5, 1.5, 8.4),
+    # Орехи и семечки.
+    DemoProduct("Миндаль", "nut", 579, 21.2, 49.9, 21.6, 12.5, 4.4),
+    DemoProduct("Грецкий орех", "nut", 654, 15.2, 65.2, 13.7, 6.7, 2.6),
+    DemoProduct("Фундук", "nut", 628, 15.0, 60.8, 16.7, 9.7, 4.3),
+    DemoProduct("Кешью", "nut", 553, 18.2, 43.8, 30.2, 3.3, 5.9),
+    DemoProduct("Семена подсолнечника", "nut", 584, 20.8, 51.5, 20.0, 8.6, 2.6),
+    DemoProduct("Семена льна", "nut", 534, 18.3, 42.2, 28.9, 27.3, 1.6),
+    DemoProduct("Кунжут", "nut", 573, 17.7, 49.7, 23.4, 11.8, 0.3),
+    # Сладости.
+    DemoProduct("Шоколад тёмный 70%", "sweet", 598, 7.8, 42.7, 45.6, 9.0, 24.0, "Бабаевский"),
+    DemoProduct("Мёд", "sweet", 304, 0.3, 0.0, 82.4, 0.2, 82.1),
+    DemoProduct("Печенье овсяное", "sweet", 437, 6.5, 15.0, 70.0, 5.0, 30.0, "Слодыч"),
+    DemoProduct("Батончик протеиновый", "sweet", 320, 30.0, 10.0, 28.0, 6.0, 4.0, "Bite"),
+    DemoProduct("Мороженое пломбир", "sweet", 232, 3.7, 15.0, 20.0, 0.5, 18.0),
+    DemoProduct("Сгущённое молоко", "sweet", 328, 7.2, 8.5, 56.0, 0.0, 56.0),
+    DemoProduct("Зефир", "sweet", 326, 0.8, 0.1, 81.0, 0.0, 60.0),
+    # Напитки.
+    DemoProduct("Кофе чёрный", "drink", 2, 0.2, 0.0, 0.0, 0.0, 0.0),
+    DemoProduct("Чай зелёный", "drink", 1, 0.0, 0.0, 0.0, 0.0, 0.0),
+    DemoProduct("Кофе с молоком", "drink", 35, 1.8, 1.6, 3.3, 0.0, 3.3),
+    DemoProduct("Сок апельсиновый", "drink", 45, 0.7, 0.1, 10.4, 0.2, 8.2, "Добрый"),
+    DemoProduct("Какао на молоке", "drink", 63, 3.3, 2.4, 7.5, 0.3, 6.7),
+    # Готовые блюда.
+    DemoProduct("Овсянка на воде", "ready", 88, 3.0, 1.5, 15.0, 1.8, 0.5),
+    DemoProduct("Овсянка на молоке", "ready", 118, 4.5, 4.0, 16.0, 1.7, 5.0),
+    DemoProduct("Борщ", "ready", 48, 2.5, 2.0, 4.8, 1.0, 2.0),
+    DemoProduct("Куриный суп", "ready", 55, 4.5, 2.5, 3.5, 0.5, 1.0),
+    DemoProduct("Салат греческий", "ready", 132, 4.0, 11.0, 4.0, 1.3, 2.5),
+    DemoProduct("Салат цезарь", "ready", 190, 9.0, 15.0, 5.0, 1.0, 2.0),
+    DemoProduct("Сырники", "ready", 230, 12.0, 10.0, 25.0, 1.0, 6.0),
+    DemoProduct("Плов с курицей", "ready", 185, 8.0, 6.0, 24.0, 1.2, 1.0),
+    DemoProduct("Гречка с маслом", "ready", 135, 4.0, 4.0, 20.0, 3.0, 0.5),
+    DemoProduct("Паста с томатами", "ready", 160, 5.5, 4.5, 25.0, 2.0, 4.0),
+    DemoProduct("Омлет с сыром", "ready", 210, 12.0, 16.0, 3.0, 0.0, 1.0),
+    DemoProduct("Творог с ягодами", "ready", 118, 12.0, 4.0, 9.0, 1.0, 7.0),
+    DemoProduct("Бутерброд с курицей", "ready", 210, 10.0, 6.0, 27.0, 2.0, 2.5),
+    DemoProduct("Бургер говяжий", "ready", 295, 13.0, 14.0, 28.0, 1.5, 5.0),
+    DemoProduct("Шаурма с курицей", "ready", 210, 11.0, 10.0, 18.0, 1.5, 2.5),
+    DemoProduct("Пицца маргарита", "ready", 266, 11.0, 10.0, 33.0, 2.0, 3.5),
+    DemoProduct("Суп-пюре тыквенный", "ready", 45, 1.2, 2.0, 5.5, 1.0, 2.0),
+    DemoProduct("Рис с овощами", "ready", 145, 3.0, 3.5, 25.0, 1.5, 1.5),
+    DemoProduct("Запеканка творожная", "ready", 168, 12.0, 7.0, 14.0, 0.5, 9.0),
+    DemoProduct("Куриное филе на гриле", "ready", 165, 27.0, 6.0, 0.0, 0.0, 0.0),
+)
+
+DEMO_PRODUCT_NAMES: tuple[str, ...] = tuple(product.name for product in DEMO_PRODUCTS)
+
+#: Сколько последних дней заполнять дневником питания (60–90 по контракту).
+DIARY_DAYS = 90
+
+#: Доли суточной калорийности по приёмам пищи.
+_MEAL_KCAL_SHARE: Mapping[str, float] = {
+    "breakfast": 0.24,
+    "lunch": 0.36,
+    "dinner": 0.30,
+    "snack": 0.10,
+}
+
+#: Состав приёма пищи: (группа продукта, доля калорий, максимум граммов).
+_MEAL_COMBO: Mapping[str, tuple[tuple[str, float, float], ...]] = {
+    "breakfast": (("grain", 0.50, 120.0), ("dairy", 0.30, 350.0), ("fruit", 0.20, 250.0)),
+    "lunch": (("protein", 0.45, 220.0), ("grain", 0.35, 120.0), ("veg", 0.20, 300.0)),
+    "dinner": (("protein", 0.40, 200.0), ("veg", 0.35, 400.0), ("grain", 0.25, 150.0)),
+    "snack": (("fruit", 0.45, 300.0), ("nut", 0.30, 60.0), ("sweet", 0.25, 60.0)),
+}
+
+#: Часы приёмов пищи для метки времени записи.
+_MEAL_HOUR: Mapping[str, int] = {"breakfast": 8, "lunch": 13, "dinner": 19, "snack": 16}
+
+#: Первые блюда из справочника — для «супа» в меню обеда и ужина.
+_DIARY_SOUPS: tuple[str, ...] = ("Борщ", "Куриный суп", "Суп-пюре тыквенный")
 
 #: Демо-цели: заголовок, цель, старт, единица.
 #: Первые три — цели прошлого набора, остальные добавлены в v4 (§14 handoff).
@@ -336,8 +579,63 @@ WORKOUT_PLAN: tuple[tuple[str, str, int, int, float, float], ...] = (
     ("Становая тяга", "deadlift", 3, 6, 90.0, 20.0),
 )
 
-#: Дни недели с тренировками (0 — понедельник): три раза в неделю.
-WORKOUT_WEEKDAYS = (0, 2, 4)
+#: Кандидаты на тренировки (0 — понедельник): Mon–Sat, три раза в неделю.
+WORKOUT_WEEKDAYS = (0, 1, 2, 3, 4, 5)
+
+#: Сколько тренировок выбирается в каждой календарной неделе.
+WORKOUT_PER_WEEK = 3
+
+# ---------------------------------------------------------------------------
+# Связи демо-дня: сон, энергия, настроение, вода, тренировки и траты
+# ---------------------------------------------------------------------------
+#
+# Демо-жизнь без связей выглядит мёртвой: движок корреляций (§12.6) на ней
+# честно не находит ничего, и экран «Аналитика» показывает пустоту. Поэтому
+# сидер закладывает правдоподобные зависимости — такие, какие бывают у
+# человека, а не подогнанные под красивый результат:
+#
+# * тренировка днём → сон этой ночи длиннее (добавка к базовым 6.85 ч);
+# * сон прошлой ночи → энергия и настроение следующего дня (главная связь
+#   демо, поэтому она сильнее остальных);
+# * вода за день → энергия (слабо: вода не заменяет сон);
+# * день с большими тратами → настроение ниже (расходы планируются раньше
+#   дневного плана, поэтому настроение считается от настоящих сумм);
+# * тренировка накануне → вес на следующее утро чуть ниже.
+#
+# У каждой связи свой шум, поэтому ни одна пара не даёт r = 1.0: на демо-базе
+# выходит |r| ≈ 0.3–0.6, и FDR-фильтр (q ≤ 0.1) пропускает 2–4 пары, а не всё
+# подряд. Редкие плохие ночи, пропуски замеров веса и выбросы сохранены.
+DEMO_SLEEP_BASE_H = 6.85
+DEMO_SLEEP_TRAIN_BONUS_H = 0.45
+DEMO_SLEEP_SIGMA_H = 0.42
+DEMO_SLEEP_BAD_NIGHT_H = 6.2
+DEMO_SLEEP_BAD_NIGHT_RATE = 0.1
+DEMO_SLEEP_MIN_H = 6.4
+DEMO_SLEEP_MAX_H = 7.9
+DEMO_ENERGY_BASE = 3.55
+DEMO_ENERGY_FROM_SLEEP = 0.53
+DEMO_ENERGY_FROM_WATER = 0.18
+DEMO_ENERGY_SIGMA = 0.95
+DEMO_MOOD_BASE = 3.5
+DEMO_MOOD_FROM_SLEEP = 0.65
+DEMO_MOOD_FROM_SPEND = -0.25
+DEMO_MOOD_SIGMA = 1.0
+DEMO_WATER_MIN_ML = 1200
+DEMO_WATER_MAX_ML = 2600
+DEMO_WATER_STEP_ML = 50
+#: Поправка к тренду веса после вчерашней тренировки и шум взвешивания, кг.
+DEMO_WEIGHT_TRAIN_DROP_KG = 0.25
+DEMO_WEIGHT_NOISE_KG = 0.15
+
+#: Чек-ины: состояние подбирается по энергии дня (1–5) — «в потоке» на подъёме,
+#: «перегруз» на спаде. Порядок весов совпадает с :data:`DEMO_CHECKIN_MOODS`.
+DEMO_CHECKIN_WEIGHTS_BY_ENERGY: dict[int, tuple[int, ...]] = {
+    1: (0, 1, 2, 3, 4),
+    2: (0, 2, 4, 4, 3),
+    3: (2, 4, 4, 3, 1),
+    4: (4, 4, 2, 1, 0),
+    5: (7, 3, 1, 0, 0),
+}
 
 
 # ---------------------------------------------------------------------------
@@ -1016,6 +1314,16 @@ class SeedStats:
     budgets: int = 0
     checkins: int = 0
     reviews: int = 0
+    # v4, миграция 4: дневник питания
+    products: int = 0
+    food_log: int = 0
+    # миграция 6: интеграции веса (scale / apple-health / manual)
+    integrations: int = 0
+    # миграция №5: практики и очки
+    practices: int = 0
+    practice_sessions: int = 0
+    points: int = 0
+    points_balance: int = 0
 
     def as_dict(self) -> dict[str, int]:
         """Плоский словарь для логов и тестов."""
@@ -1049,6 +1357,13 @@ class SeedStats:
             "budgets": self.budgets,
             "checkins": self.checkins,
             "reviews": self.reviews,
+            "products": self.products,
+            "food_log": self.food_log,
+            "integrations": self.integrations,
+            "practices": self.practices,
+            "practice_sessions": self.practice_sessions,
+            "points": self.points,
+            "points_balance": self.points_balance,
         }
 
     def summary(self) -> str:
@@ -1072,6 +1387,12 @@ class SeedStats:
             "%d бюджетов" % self.budgets,
             "%d чек-инов" % self.checkins,
             "%d итогов" % self.reviews,
+            "%d продуктов" % self.products,
+            "%d записей дневника" % self.food_log,
+            "%d интеграций" % self.integrations,
+            "%d практик" % self.practices,
+            "%d сессий практик" % self.practice_sessions,
+            "%d очков" % self.points_balance,
             "%d курсов" % self.courses,
             "%d уроков" % self.lessons,
             "%d сегментов" % self.segments,
@@ -1107,6 +1428,9 @@ def clear_demo(conn: sqlite3.Connection) -> SeedStats:
     отвязываются от демо-сфер, чтобы ``spheres`` можно было удалить.
     """
     stats = SeedStats()
+    # Таблицы практик и очков могли появиться не в этой версии базы —
+    # создаём идемпотентно, иначе удаление демо упадёт на старом файле.
+    ensure_practices(conn)
     habit_ph = _placeholders(DEMO_HABIT_NAMES)
     goal_ph = _placeholders(DEMO_GOAL_TITLES)
     course_ph = _placeholders(DEMO_COURSE_TITLES)
@@ -1121,6 +1445,7 @@ def clear_demo(conn: sqlite3.Connection) -> SeedStats:
     category_params = tuple(
         value for name, kind, _ in DEMO_CATEGORIES for value in (name, kind)
     )
+    product_ph = _placeholders(DEMO_PRODUCT_NAMES)
     checkin_like = "%" + DEMO_CHECKIN_TIME + TZ_SUFFIX
 
     with conn:
@@ -1237,6 +1562,22 @@ def clear_demo(conn: sqlite3.Connection) -> SeedStats:
         stats.reviews = _count(
             conn, "SELECT COUNT(*) FROM reviews WHERE facts_json LIKE ?", ('%"demo": true%',)
         )
+        stats.products = _count(
+            conn,
+            "SELECT COUNT(*) FROM products WHERE name IN (%s)" % product_ph,
+            DEMO_PRODUCT_NAMES,
+        )
+        stats.food_log = _count(
+            conn, "SELECT COUNT(*) FROM food_log WHERE source = ?", (DEMO_SOURCE,)
+        )
+        stats.practice_sessions = _count(
+            conn,
+            "SELECT COUNT(*) FROM practice_sessions WHERE source = ?",
+            (DEMO_SOURCE,),
+        )
+        stats.points = _count(
+            conn, "SELECT COUNT(*) FROM points_ledger WHERE source = ?", (DEMO_SOURCE,)
+        )
         stats.courses = _count(
             conn,
             "SELECT COUNT(*) FROM courses WHERE title IN (%s)" % course_ph,
@@ -1254,6 +1595,19 @@ def clear_demo(conn: sqlite3.Connection) -> SeedStats:
             "WHERE course_id IN (SELECT id FROM courses WHERE title IN (%s)))" % course_ph,
             DEMO_COURSE_TITLES,
         )
+
+        # Дневник питания: записи — по метке source, затем справочник по именам.
+        # Пользовательские записи дневника остаются (product_id обнулится).
+        conn.execute("DELETE FROM food_log WHERE source = ?", (DEMO_SOURCE,))
+        conn.execute(
+            "DELETE FROM products WHERE name IN (%s)" % product_ph, DEMO_PRODUCT_NAMES
+        )
+
+        # Практики и очки: сессии и начисления — по метке source. Каталог
+        # практик остаётся: это содержимое приложения, а не демо-история
+        # (без него плееру нечего показывать на чистой базе).
+        conn.execute("DELETE FROM practice_sessions WHERE source = ?", (DEMO_SOURCE,))
+        conn.execute("DELETE FROM points_ledger WHERE source = ?", (DEMO_SOURCE,))
 
         # Журнал, метрики и транзакции — по метке source.
         conn.execute("DELETE FROM entries WHERE source = ?", (DEMO_SOURCE,))
@@ -1359,14 +1713,31 @@ def seed(
     stamp = "%sT12:00:00%s" % (last_day.isoformat(), TZ_SUFFIX)
 
     with conn:
-        entries, metrics = _build_daily(rnd, dates)
+        # Расходы планируются первыми: настроение в демо зависит от них.
+        transactions, expense_by_day = _plan_transactions(rnd, dates, last_day)
+        plan = _build_day_plan(rnd, dates, expense_by_day)
+        entries, metrics = _build_daily(rnd, dates, plan)
         _insert_entries(conn, entries)
         _insert_metrics(conn, metrics)
         spheres = _build_spheres(conn, stamp)
         marks = _build_habits(conn, rnd, dates, stamp, spheres)
         goals, goal_steps = _build_goals(conn, rnd, last_day, stamp, spheres)
         courses = _build_courses(conn, rnd, last_day, stamp)
-        world = _build_world(conn, rnd, dates, last_day, stamp, spheres, goals)
+        world = _build_world(
+            conn, rnd, dates, last_day, stamp, spheres, goals, plan, transactions
+        )
+        products = _build_products(conn, stamp)
+        _build_integrations(conn)
+        diary = _build_diary(rnd, dates[-DIARY_DAYS:], products)
+        _insert_food_log(conn, diary)
+        # Практики — последними: очки за привычки, дела, чек-ины и мысли
+        # считаются по уже вставленным строкам.
+        practice_counts: dict[str, int] = {
+            "practice_sessions": 0,
+            "points": 0,
+            "points_balance": 0,
+        }
+        _build_practices(conn, dates, stamp, practice_counts)
 
     stats.entries = len(entries)
     stats.metrics = len(metrics)
@@ -1380,7 +1751,25 @@ def seed(
     stats.progress = courses["progress"]
     stats.transcripts = courses["transcripts"]
     stats.spheres = len(DEMO_SPHERES)
+    stats.products = len(DEMO_PRODUCTS)
+    stats.food_log = len(diary)
+    stats.integrations = _count(conn, "SELECT COUNT(*) FROM integrations")
     stats.goal_steps = goal_steps
+    stats.practices = _count(conn, "SELECT COUNT(*) FROM practices")
+    stats.practice_sessions = practice_counts["practice_sessions"]
+    # Очки считаем по факту журнала: сессия даёт до трёх начислений
+    # (практика, рекорд, серия), поэтому «сколько строк в журнале» точнее,
+    # чем счётчик, который вели по ходу записи.
+    stats.points = _count(
+        conn, "SELECT COUNT(*) FROM points_ledger WHERE source = ?", (DEMO_SOURCE,)
+    )
+    stats.points_balance = int(
+        conn.execute(
+            "SELECT COALESCE(SUM(points), 0) FROM points_ledger WHERE source = ?",
+            (DEMO_SOURCE,),
+        ).fetchone()[0]
+        or 0
+    )
     for field, value in world.items():
         setattr(stats, field, value)
     return stats
@@ -1394,37 +1783,164 @@ def _as_date(value: Any) -> _date:
     return _date.fromisoformat(str(value))
 
 
+# -- день: латентный план и зависимости ------------------------------------
+
+
+def _series_stats(values: Mapping[str, float]) -> tuple[float, float]:
+    """Среднее и стандартное отклонение ряда; sd не бывает нулевым."""
+    numbers = list(values.values())
+    if not numbers:
+        return 0.0, 1.0
+    mean = sum(numbers) / len(numbers)
+    variance = sum((value - mean) ** 2 for value in numbers) / len(numbers)
+    return mean, max(variance**0.5, 1e-6)
+
+
+def _build_day_plan(
+    rnd: random.Random,
+    dates: Sequence[_date],
+    expense_by_day: Mapping[str, int] | None = None,
+) -> dict[str, dict[str, float]]:
+    """Латентные ряды демо-дня: сон, вода, энергия, настроение и тренировки.
+
+    Возвращает словари «дата → значение» и закладывает те связи, которые
+    потом ищет движок корреляций (см. комментарий к ``DEMO_*`` константам):
+
+    * сон этой ночи зависит от тренировки в этот день (+45 мин) и редкой
+      плохой ночи (ровно 6.2 ч, как и раньше);
+    * энергия следующего дня — от сна прошлой ночи (сильная связь) и воды
+      (слабая);
+    * настроение следующего дня — от сна прошлой ночи и от того, сколько
+      в этот день потрачено (``expense_by_day`` в копейках: дорогой день —
+      настроение ниже);
+    * тренировка накануне → вес на следующее утро чуть ниже (см. ``_build_daily``).
+
+    У каждой зависимости свой шум: значения энергии и настроения округляются
+    до баллов, поэтому связь выходит заметной (r ≈ 0.3–0.6), но не идеальной.
+    """
+
+    days = [day.isoformat() for day in dates]
+
+    # Тренировки: три дня в каждой календарной неделе, но дни выбираются
+    # заново. Жёсткое «Пн-Ср-Пт» давало идеальную периодичность: движок
+    # корреляций ловил на ней ложную связь тренировок со сном через день.
+    training = {day.isoformat(): False for day in dates}
+    weeks: dict[tuple[int, int], list[_date]] = {}
+    for day in dates:
+        weeks.setdefault(day.isocalendar()[:2], []).append(day)
+    for week_days in weeks.values():
+        candidates = [day for day in week_days if day.weekday() in WORKOUT_WEEKDAYS]
+        chosen = rnd.sample(candidates, min(WORKOUT_PER_WEEK, len(candidates)))
+        for day in chosen:
+            training[day.isoformat()] = True
+
+    sleep_h: dict[str, float] = {}
+    for index, day in enumerate(days):
+        if index and not training[day] and rnd.random() < DEMO_SLEEP_BAD_NIGHT_RATE:
+            # Редкая плохая ночь — ровно 6.2 ч. Дни случайные, а не раз в
+            # 12 дней (периодичность билась бы с недельным графиком и давала
+            # ложные связи на лагах) и не совпадают с тренировками: иначе
+            # случайная кучка плохих ночей гасит связь «тренировка → сон».
+            sleep_h[day] = DEMO_SLEEP_BAD_NIGHT_H
+            continue
+        hours = (
+            DEMO_SLEEP_BASE_H
+            + (DEMO_SLEEP_TRAIN_BONUS_H if training[day] else 0.0)
+            + rnd.gauss(0.0, DEMO_SLEEP_SIGMA_H)
+        )
+        sleep_h[day] = round(min(DEMO_SLEEP_MAX_H, max(DEMO_SLEEP_MIN_H, hours)), 1)
+
+    water_ml = {
+        day: float(
+            rnd.randrange(DEMO_WATER_MIN_ML, DEMO_WATER_MAX_ML + 1, DEMO_WATER_STEP_ML)
+        )
+        for day in days
+    }
+
+    spend = {
+        day: float((expense_by_day or {}).get(day, 0)) / 100.0 for day in days
+    }
+
+    sleep_mean, sleep_sd = _series_stats(sleep_h)
+    water_mean, water_sd = _series_stats(water_ml)
+    spend_mean, spend_sd = _series_stats(spend)
+
+    energy: dict[str, int] = {}
+    mood: dict[str, int] = {}
+    for index, day in enumerate(days):
+        previous_sleep = sleep_h[days[index - 1]] if index else sleep_mean
+        sleep_z = (previous_sleep - sleep_mean) / sleep_sd
+        water_z = (water_ml[day] - water_mean) / water_sd
+        spend_z = (spend[day] - spend_mean) / spend_sd
+        energy_raw = (
+            DEMO_ENERGY_BASE
+            + DEMO_ENERGY_FROM_SLEEP * sleep_z
+            + DEMO_ENERGY_FROM_WATER * water_z
+            + rnd.gauss(0.0, DEMO_ENERGY_SIGMA)
+        )
+        energy[day] = int(min(5, max(2, round(energy_raw))))
+        mood_raw = (
+            DEMO_MOOD_BASE
+            + DEMO_MOOD_FROM_SLEEP * sleep_z
+            + DEMO_MOOD_FROM_SPEND * spend_z
+            + rnd.gauss(0.0, DEMO_MOOD_SIGMA)
+        )
+        mood[day] = int(min(5, max(2, round(mood_raw))))
+
+    return {
+        "training": training,
+        "sleep": sleep_h,
+        "water": water_ml,
+        "spend": spend,
+        "energy": energy,
+        "mood": mood,
+    }
+
+
 # -- журнал и метрики ------------------------------------------------------
 
 
 def _build_daily(
-    rnd: random.Random, dates: Sequence[_date]
+    rnd: random.Random,
+    dates: Sequence[_date],
+    plan: Mapping[str, Mapping[str, Any]],
 ) -> tuple[list[tuple[str, str, str, str, str]], list[tuple[str, str, float, str, str]]]:
-    """Собирает записи журнала и метрики за все дни."""
+    """Собирает записи журнала и метрики за все дни.
+
+    Сон, вода, энергия и настроение берутся из :func:`_build_day_plan`: там
+    уже посчитаны их зависимости друг от друга, а здесь они просто попадают
+    в ``metrics`` (энергия и настроение — ещё и в чек-ины, см. ``_build_checkins``).
+    """
     entries: list[tuple[str, str, str, str, str]] = []
     metrics: list[tuple[str, str, float, str, str]] = []
 
     measure_flags = [index % 7 in (0, 1, 3, 4, 6) for index in range(len(dates))]
     measured_total = max(1, sum(measure_flags))
     measured_seen = 0
+    workout_index = 0
 
     for index, day in enumerate(dates):
         date_str = day.isoformat()
 
-        # Сон, настроение, энергия и вода — каждый день.
-        sleep_hours = 6.2 if index and index % 12 == 0 else rnd.uniform(6.4, 8.0)
-        metrics.append((date_str, "sleep", round(sleep_hours, 1), "ч", DEMO_SOURCE))
-        metrics.append((date_str, "mood", rnd.randint(2, 5), "балл", DEMO_SOURCE))
-        metrics.append((date_str, "energy", rnd.randint(2, 5), "балл", DEMO_SOURCE))
+        # Сон, настроение, энергия и вода — каждый день, из латентного плана.
+        metrics.append((date_str, "sleep", float(plan["sleep"][date_str]), "ч", DEMO_SOURCE))
+        metrics.append((date_str, "mood", float(plan["mood"][date_str]), "балл", DEMO_SOURCE))
         metrics.append(
-            (date_str, "water", float(rnd.randrange(1200, 2601, 50)), "мл", DEMO_SOURCE)
+            (date_str, "energy", float(plan["energy"][date_str]), "балл", DEMO_SOURCE)
         )
+        metrics.append((date_str, "water", float(plan["water"][date_str]), "мл", DEMO_SOURCE))
 
         # Вес и состав тела — 5 дней из 7.
         if measure_flags[index]:
             progress = measured_seen / (measured_total - 1) if measured_total > 1 else 0.0
             measured_seen += 1
-            weight = 81.4 - 1.6 * progress + rnd.uniform(-0.4, 0.4)
+            weight = (
+                81.4 - 1.6 * progress + rnd.uniform(-DEMO_WEIGHT_NOISE_KG, DEMO_WEIGHT_NOISE_KG)
+            )
+            if index and plan["training"].get(dates[index - 1].isoformat()):
+                # Вчерашняя тренировка «съедает» немного веса к утру — слабая,
+                # но настоящая связь «Тренировки → Вес» на следующий день.
+                weight -= DEMO_WEIGHT_TRAIN_DROP_KG
             fat = 18.5 - 1.3 * progress + rnd.uniform(-0.15, 0.15)
             muscle = 34.8 + 0.5 * progress + rnd.uniform(-0.1, 0.1)
             body_water = 55.0 + 1.0 * progress + rnd.uniform(-0.3, 0.3)
@@ -1433,32 +1949,7 @@ def _build_daily(
             metrics.append((date_str, "muscle", round(muscle, 1), "кг", DEMO_SOURCE))
             metrics.append((date_str, "body_water", round(body_water, 1), "%", DEMO_SOURCE))
 
-        # Питание: 2–4 записи в день с КБЖУ.
-        meals: list[tuple[int, str, tuple[str, int, int, int, int]]] = [
-            (8, "Завтрак", rnd.choice(BREAKFASTS)),
-            (13, "Обед", rnd.choice(LUNCHES)),
-            (19, "Ужин", rnd.choice(DINNERS)),
-        ]
-        if rnd.random() < 0.6:
-            meals.append((16, "Перекус", rnd.choice(SNACKS)))
-        for hour, label, (title, kcal, protein, fat_g, carbs) in meals:
-            entries.append(
-                (
-                    _ts(day, hour, rnd.choice((5, 15, 25, 35, 45))),
-                    "food",
-                    "%s: %s" % (label, title),
-                    DEMO_SOURCE,
-                    _meta(
-                        {
-                            "meal": label,
-                            "kcal": kcal,
-                            "protein_g": protein,
-                            "fat_g": fat_g,
-                            "carbs_g": carbs,
-                        }
-                    ),
-                )
-            )
+        # Питание живёт в отдельном дневнике (food_log) — см. _build_diary.
 
         # Журнал: пять разных записей в день + настроение и заметка.
         for moment, text in zip((8, 11, 14, 17, 21), rnd.sample(JOURNAL_TEXTS, 5)):
@@ -1468,7 +1959,8 @@ def _build_daily(
             )
         entries.append(
             (_ts(day, 20, rnd.choice((5, 15, 30, 45))), "mood",
-             rnd.choice(MOOD_TEXTS), DEMO_SOURCE, _meta({"score": rnd.randint(2, 5)}))
+             rnd.choice(MOOD_TEXTS), DEMO_SOURCE,
+             _meta({"score": int(plan["mood"][date_str])}))
         )
         if rnd.random() < 0.7:
             entries.append(
@@ -1482,11 +1974,13 @@ def _build_daily(
                  _meta({"ml": rnd.randrange(300, 600, 50)}))
             )
 
-        # Тренировки: три раза в неделю с прогрессией веса.
-        if day.weekday() in WORKOUT_WEEKDAYS:
+        # Тренировки: три раза в неделю с прогрессией веса. Дни приходят из
+        # плана (они же нужны связи «тренировка → сон»), упражнения — по кругу.
+        if plan["training"][date_str]:
             name, key, sets, reps, start_weight, step = WORKOUT_PLAN[
-                WORKOUT_WEEKDAYS.index(day.weekday())
+                workout_index % len(WORKOUT_PLAN)
             ]
+            workout_index += 1
             week = index / 7.0
             weight = start_weight + step * (week / (len(dates) / 7.0 or 1.0))
             weight = round(weight / 2.5) * 2.5
@@ -1525,6 +2019,179 @@ def _insert_metrics(conn: sqlite3.Connection, metrics: Sequence[tuple]) -> None:
     conn.executemany(
         "INSERT INTO metrics (date, kind, value, unit, source) VALUES (?, ?, ?, ?, ?)",
         metrics,
+    )
+
+
+# -- дневник питания -------------------------------------------------------
+
+
+def _build_integrations(conn: sqlite3.Connection) -> None:
+    """Гарантирует три базовые интеграции веса.
+
+    Это не демо-строки, а возможности продукта: ``clear_demo`` их не удаляет,
+    повторный сид не перезатирает пользовательские ``enabled``/``last_sync``.
+    """
+    ensure_integrations(conn, commit=False)
+
+
+def _build_products(
+    conn: sqlite3.Connection, stamp: str
+) -> dict[str, tuple[int, DemoProduct]]:
+    """Создаёт справочник продуктов; возвращает имя → ``(id, продукт)``."""
+    created: dict[str, tuple[int, DemoProduct]] = {}
+    for product in DEMO_PRODUCTS:
+        cursor = conn.execute(
+            "INSERT INTO products (name, brand, kcal, protein, fat, carbs, fiber, "
+            "sugar, base_grams, created, archived) VALUES (?, ?, ?, ?, ?, ?, ?, ?, "
+            "100, ?, 0)",
+            (
+                product.name,
+                product.brand,
+                product.kcal,
+                product.protein,
+                product.fat,
+                product.carbs,
+                product.fiber,
+                product.sugar,
+                stamp,
+            ),
+        )
+        created[product.name] = (int(cursor.lastrowid or 0), product)
+    return created
+
+
+def _portion_grams(product: DemoProduct, kcal_target: float, cap: float) -> float:
+    """Граммовка порции под целевую калорийность, с шагом 5 г и потолком."""
+    if product.kcal <= 0:
+        return 0.0
+    grams = min(kcal_target / (product.kcal / 100.0), cap)
+    return max(5.0, round(grams / 5.0) * 5.0)
+
+
+def _diary_row(
+    day: _date,
+    meal: str,
+    ts: str,
+    product: DemoProduct,
+    grams: float,
+    product_id: int,
+) -> tuple[Any, ...]:
+    """Строка ``food_log``: макросы считаются из продукта на 100 г."""
+    factor = grams / 100.0
+    return (
+        day.isoformat(),
+        ts,
+        meal,
+        product_id,
+        product.name,
+        round(grams, 1),
+        round(product.kcal * factor, 1),
+        round(product.protein * factor, 1),
+        round(product.fat * factor, 1),
+        round(product.carbs * factor, 1),
+        round(product.fiber * factor, 1),
+        round(product.sugar * factor, 1),
+        DEMO_SOURCE,
+    )
+
+
+def _build_diary(
+    rnd: random.Random,
+    dates: Sequence[_date],
+    products: Mapping[str, tuple[int, DemoProduct]],
+) -> list[tuple[Any, ...]]:
+    """Дневник питания: 3–4 приёма в день на 1800–2400 ккал.
+
+    Каждый приём собирается из групп продуктов (крупа + молочка + фрукт на
+    завтрак, белок + крупа + овощи на обед и т. д.), граммовка считается от
+    целевой калорийности приёма. Если день вышел за коридор 1800–2400 ккал,
+    крупа (самая калорийная позиция) подгоняется на несколько десятков граммов
+    — так суммы остаются правдоподобными и детерминированными.
+    """
+    pools: dict[str, list[DemoProduct]] = {}
+    for product in DEMO_PRODUCTS:
+        pools.setdefault(product.group, []).append(product)
+    protein_pool = pools["meat"] + pools["fish"]
+
+    rows: list[tuple[Any, ...]] = []
+    for day in dates:
+        target = rnd.uniform(1950.0, 2300.0)
+        meals = ["breakfast", "lunch", "dinner"]
+        if rnd.random() < 0.7:
+            meals.append("snack")
+        shares = {meal: _MEAL_KCAL_SHARE[meal] for meal in meals}
+        share_total = sum(shares.values())
+
+        items: list[dict[str, Any]] = []
+        for meal in meals:
+            kcal_target = target * shares[meal] / share_total
+            for group, part, cap in _MEAL_COMBO[meal]:
+                pool = protein_pool if group == "protein" else pools[group]
+                product = rnd.choice(pool)
+                grams = _portion_grams(product, kcal_target * part, cap)
+                if grams < 5.0:
+                    continue
+                items.append(
+                    {
+                        "meal": meal,
+                        "group": group,
+                        "product": product,
+                        "grams": grams,
+                        "ts": _ts(day, _MEAL_HOUR[meal], rnd.choice((0, 10, 20, 30, 40, 50))),
+                    }
+                )
+
+            # Разнообразие: кофе и яйцо к завтраку, хлеб и суп к обеду/ужину.
+            extras: tuple[tuple[str, float, float], ...] = ()
+            if meal == "breakfast":
+                extras = (("drink", 200.0, 0.85), ("egg", 50.0, 0.30))
+            elif meal == "lunch":
+                extras = (("bread", 60.0, 0.35), ("soup", 300.0, 0.30))
+            elif meal == "dinner":
+                extras = (("soup", 250.0, 0.20),)
+            for group, grams, chance in extras:
+                if rnd.random() >= chance:
+                    continue
+                if group == "drink":
+                    product = next(p for p in pools["drink"] if p.name == "Кофе чёрный")
+                elif group == "soup":
+                    product = next(p for p in pools["ready"] if p.name in _DIARY_SOUPS)
+                else:
+                    product = rnd.choice(pools[group])
+                items.append(
+                    {
+                        "meal": meal,
+                        "group": "soup" if group == "soup" else group,
+                        "product": product,
+                        "grams": grams,
+                        "ts": _ts(day, _MEAL_HOUR[meal], rnd.choice((0, 10, 20, 30, 40, 50))),
+                    }
+                )
+
+        total = sum(item["product"].kcal * item["grams"] / 100.0 for item in items)
+        grain = next((item for item in items if item["group"] == "grain"), None)
+        if grain is not None and grain["product"].kcal > 0:
+            if total < 1840.0:
+                extra = (1840.0 - total) / (grain["product"].kcal / 100.0)
+                grain["grams"] = round((grain["grams"] + extra) / 5.0) * 5.0
+            elif total > 2360.0:
+                cut = (total - 2360.0) / (grain["product"].kcal / 100.0)
+                grain["grams"] = max(5.0, round((grain["grams"] - cut) / 5.0) * 5.0)
+
+        for item in items:
+            product = item["product"]
+            product_id = products[product.name][0]
+            rows.append(
+                _diary_row(day, item["meal"], item["ts"], product, item["grams"], product_id)
+            )
+    return rows
+
+
+def _insert_food_log(conn: sqlite3.Connection, rows: Sequence[tuple[Any, ...]]) -> None:
+    conn.executemany(
+        "INSERT INTO food_log (date, ts, meal, product_id, text, grams, kcal, protein, "
+        "fat, carbs, fiber, sugar, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        rows,
     )
 
 
@@ -1653,6 +2320,8 @@ def _build_world(
     stamp: str,
     spheres: Mapping[str, int],
     goals: Mapping[str, int],
+    plan: Mapping[str, Mapping[str, Any]],
+    transactions: Sequence[tuple[str, int, str, str, str, str]],
 ) -> dict[str, int]:
     """Строит новые сущности v4 и возвращает счётчики созданных строк."""
     counts = {
@@ -1678,8 +2347,8 @@ def _build_world(
     _build_tasks(conn, rnd, dates, today, stamp, spheres, projects, goals, counts)
     _build_inbox(conn, stamp, counts)
     _build_books(conn, rnd, today, stamp, counts)
-    _build_finance(conn, rnd, dates, today, stamp, counts)
-    _build_checkins(conn, rnd, dates, counts)
+    _build_finance(conn, stamp, today, counts, transactions)
+    _build_checkins(conn, rnd, dates, counts, plan)
     _build_reviews(conn, today, stamp, counts)
     return counts
 
@@ -1988,15 +2657,89 @@ def _build_books(
 # -- v4: финансы -----------------------------------------------------------
 
 
+def _plan_transactions(
+    rnd: random.Random, dates: Sequence[_date], today: _date
+) -> tuple[list[tuple[str, int, str, str, str, str]], dict[str, int]]:
+    """Планирует 180 транзакций до создания счетов и категорий.
+
+    Возвращает ``(строки, суммы расходов по дням)``. Строка —
+    ``(ts, amount_kopecks, kind, категория, счёт, note)``: категория и счёт
+    здесь имена из :data:`DEMO_CATEGORIES` / :data:`DEMO_ACCOUNTS`, id им
+    подставит :func:`_build_finance`.
+
+    Планирование вынесено отдельно, потому что суммы расходов по дням нужны
+    дневному плану: настроение в демо зависит от того, сколько в этот день
+    реально потрачено (см. :func:`_build_day_plan`).
+    """
+    window = list(dates[-90:]) if len(dates) > 90 else list(dates)
+    expense_categories = [name for name, kind, _ in DEMO_CATEGORIES if kind == "expense"]
+    transactions: list[tuple[str, int, str, str, str, str]] = []
+    expense_by_day: dict[str, int] = {}
+
+    # Регулярные доходы: зарплата 5-го числа, проценты 1-го числа.
+    for day in window:
+        if day.day == 5:
+            transactions.append(
+                (_ts(day, 10, 0), 14500000, "income", "Зарплата", "Карта зарплатная", "Зарплата")
+            )
+        if day.day == 1 and day != today:
+            transactions.append(
+                (
+                    _ts(day, 9, 30),
+                    35000,
+                    "income",
+                    "Проценты по вкладу",
+                    "Накопительный счёт",
+                    "Проценты по вкладу",
+                )
+            )
+
+    # Пара фриланс-поступлений в окне.
+    for _ in range(2):
+        day = rnd.choice(window)
+        transactions.append(
+            (
+                _ts(day, 15, 0),
+                rnd.randrange(1500000, 4500000, 100),
+                "income",
+                "Фриланс",
+                "Карта зарплатная",
+                rnd.choice(("Оплата за консультацию", "Проект на подряде", "Правки к макету")),
+            )
+        )
+
+    # Расходы: пока не наберётся ровно 180 транзакций.
+    while len(transactions) < 180:
+        day = rnd.choice(window)
+        category_name = rnd.choice(expense_categories)
+        note, minimum, maximum = rnd.choice(DEMO_EXPENSE_TEMPLATES[category_name])
+        amount = rnd.randrange(minimum, maximum + 1, 100)
+        account = "Наличные" if amount < 100000 else "Карта зарплатная"
+        transactions.append(
+            (
+                _ts(day, rnd.choice((8, 9, 12, 13, 17, 18, 19, 20)), rnd.choice((0, 10, 20, 30, 40, 50))),
+                amount,
+                "expense",
+                category_name,
+                account,
+                note,
+            )
+        )
+        day_key = day.isoformat()
+        expense_by_day[day_key] = expense_by_day.get(day_key, 0) + amount
+
+    transactions.sort(key=lambda row: row[0])
+    return transactions, expense_by_day
+
+
 def _build_finance(
     conn: sqlite3.Connection,
-    rnd: random.Random,
-    dates: Sequence[_date],
-    today: _date,
     stamp: str,
+    today: _date,
     counts: dict[str, int],
+    transactions: Sequence[tuple[str, int, str, str, str, str]],
 ) -> None:
-    """3 счёта, 10 категорий, 3 бюджета и 180 транзакций в целых копейках."""
+    """3 счёта, 10 категорий, 3 бюджета и заранее спланированные транзакции."""
     account_ids: dict[str, int] = {}
     for sort, (name, kind, balance) in enumerate(DEMO_ACCOUNTS):
         cursor = conn.execute(
@@ -2025,91 +2768,39 @@ def _build_finance(
         )
         counts["budgets"] += 1
 
-    window = list(dates[-90:]) if len(dates) > 90 else list(dates)
-    expense_categories = [name for name, kind, _ in DEMO_CATEGORIES if kind == "expense"]
-    transactions: list[tuple[str, int, str, int, int, str]] = []
-
-    # Регулярные доходы: зарплата 5-го числа, проценты 1-го числа.
-    for day in window:
-        if day.day == 5:
-            transactions.append(
-                (
-                    _ts(day, 10, 0),
-                    14500000,
-                    "income",
-                    category_ids["Зарплата"],
-                    account_ids["Карта зарплатная"],
-                    "Зарплата",
-                )
-            )
-        if day.day == 1 and day != today:
-            transactions.append(
-                (
-                    _ts(day, 9, 30),
-                    35000,
-                    "income",
-                    category_ids["Проценты по вкладу"],
-                    account_ids["Накопительный счёт"],
-                    "Проценты по вкладу",
-                )
-            )
-
-    # Пара фриланс-поступлений в окне.
-    for _ in range(2):
-        day = rnd.choice(window)
-        transactions.append(
-            (
-                _ts(day, 15, 0),
-                rnd.randrange(1500000, 4500000, 100),
-                "income",
-                category_ids["Фриланс"],
-                account_ids["Карта зарплатная"],
-                rnd.choice(("Оплата за консультацию", "Проект на подряде", "Правки к макету")),
-            )
-        )
-
-    # Расходы: пока не наберётся ровно 180 транзакций.
-    while len(transactions) < 180:
-        day = rnd.choice(window)
-        category_name = rnd.choice(expense_categories)
-        note, minimum, maximum = rnd.choice(DEMO_EXPENSE_TEMPLATES[category_name])
-        amount = rnd.randrange(minimum, maximum + 1, 100)
-        account = (
-            account_ids["Наличные"]
-            if amount < 100000
-            else account_ids["Карта зарплатная"]
-        )
-        transactions.append(
-            (
-                _ts(day, rnd.choice((8, 9, 12, 13, 17, 18, 19, 20)), rnd.choice((0, 10, 20, 30, 40, 50))),
-                amount,
-                "expense",
-                category_ids[category_name],
-                account,
-                note,
-            )
-        )
-
-    transactions.sort(key=lambda row: row[0])
+    rows = [
+        (ts, amount, kind, category_ids[category], account_ids[account], note)
+        for ts, amount, kind, category, account, note in transactions
+    ]
     conn.executemany(
         "INSERT INTO transactions (ts, amount_kopecks, kind, category_id, account_id, note, "
         "source, created) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [row + (DEMO_SOURCE, stamp) for row in transactions],
+        [row + (DEMO_SOURCE, stamp) for row in rows],
     )
-    counts["transactions"] += len(transactions)
+    counts["transactions"] += len(rows)
 
 
 # -- v4: рефлексия ---------------------------------------------------------
 
 
 def _build_checkins(
-    conn: sqlite3.Connection, rnd: random.Random, dates: Sequence[_date], counts: dict[str, int]
+    conn: sqlite3.Connection,
+    rnd: random.Random,
+    dates: Sequence[_date],
+    counts: dict[str, int],
+    plan: Mapping[str, Mapping[str, Any]],
 ) -> None:
-    """90 чек-инов энергии; строку пользователя на ту же дату не перезаписываем."""
+    """90 чек-инов энергии из дневного плана; строку пользователя не перезаписываем.
+
+    Энергия та же, что в ``metrics`` (её же видит движок корреляций), а
+    состояние подбирается по энергии: на подъёме чаще «в потоке», на спаде —
+    «перегруз». Поэтому чек-ин и графики не противоречат друг другу.
+    """
     window = list(dates[-90:]) if len(dates) > 90 else list(dates)
     for day in window:
-        energy = rnd.choices((1, 2, 3, 4, 5), weights=(1, 2, 4, 4, 2))[0]
-        mood = rnd.choices(DEMO_CHECKIN_MOODS, weights=DEMO_CHECKIN_MOOD_WEIGHTS)[0]
+        energy = int(plan["energy"][day.isoformat()])
+        weights = DEMO_CHECKIN_WEIGHTS_BY_ENERGY.get(energy, DEMO_CHECKIN_MOOD_WEIGHTS)
+        mood = rnd.choices(DEMO_CHECKIN_MOODS, weights=weights)[0]
         note = rnd.choice(DEMO_CHECKIN_NOTES) if rnd.random() < 0.4 else ""
         cursor = conn.execute(
             "INSERT OR IGNORE INTO checkins (date, energy, mood, note, created) "
@@ -2117,6 +2808,144 @@ def _build_checkins(
             (day.isoformat(), energy, mood, note, day.isoformat() + DEMO_CHECKIN_TIME + TZ_SUFFIX),
         )
         counts["checkins"] += int(cursor.rowcount)
+
+
+def _practice_moment(day: _date, hour: int) -> datetime:
+    """Момент демо-сессии: дата, час и московское смещение из ``TZ_SUFFIX``."""
+    return datetime.fromisoformat("%sT%02d:00:00%s" % (day.isoformat(), hour, TZ_SUFFIX))
+
+
+def _build_practices(
+    conn: sqlite3.Connection, dates: Sequence[_date], stamp: str, counts: dict[str, int]
+) -> None:
+    """30 демо-сессий практик за 90 дней и начисления за уже посеянное.
+
+    Сессии пишутся тем же :func:`app.server.practices.save_practice_session`,
+    что и живой плеер, поэтому демо подчиняется тем же правилам: одна сессия
+    на практику в день, рекорд задержки двигается, кап дня (60) не
+    пробивается. Последняя сессия — вчера: сегодняшний день свободен для
+    первой настоящей практики.
+    """
+    ensure_practice_catalog(conn, stamp=stamp)
+    first = dates[0]
+    yesterday = dates[-1] - timedelta(days=1)
+    total = len(DEMO_PRACTICES)
+    # Последние четыре дня — подряд: так у демо-базы есть живая серия, которая
+    # видна на экране и даёт бонусы за серию в журнале. Остальные — редкими
+    # точками по 90 дням (шаг 3), чтобы не выглядело как механический график.
+    recent = [yesterday - timedelta(days=offset) for offset in range(4)][::-1]
+    older_total = max(0, total - len(recent))
+    older = [
+        yesterday - timedelta(days=4 + index * 3) for index in range(older_total)
+    ]
+    days = [day for day in older if day >= first][:older_total] + recent
+    days = sorted(day for day in days if day >= first)
+    if not days:  # окно в один день: одна сессия всё равно нужна
+        days = [dates[-1]]
+
+    with conn:
+        for day, (slug, hour, rounds, hold) in zip(days, DEMO_PRACTICES):
+            save_practice_session(
+                conn,
+                slug=slug,
+                rounds_done=rounds,
+                best_hold_s=hold,
+                source=DEMO_SOURCE,
+                now=_practice_moment(day, hour),
+                points_source=DEMO_SOURCE,
+            )
+            counts["practice_sessions"] += 1
+
+    _award_demo_points(conn, counts)
+
+
+def _award_demo_points(conn: sqlite3.Connection, counts: dict[str, int]) -> None:
+    """Очки за посеянные демо-события: чек-ины, привычки, дела, мысли.
+
+    Идём через :func:`app.server.practices.award` — тот же журнал и тот же
+    кап дня, что у живой работы. Поэтому баланс демо-базы честно равен сумме
+    ``points_ledger``, а не «нарисованному» числу в сидере.
+    """
+    checkins = conn.execute("SELECT date FROM checkins ORDER BY date").fetchall()
+    marks = conn.execute(
+        "SELECT m.habit_id, m.date, h.name FROM habit_marks AS m "
+        "JOIN habits AS h ON h.id = m.habit_id ORDER BY m.date"
+    ).fetchall()
+    tasks = conn.execute(
+        "SELECT id, title, COALESCE(done_at, created) AS done FROM tasks "
+        "WHERE status = 'done' ORDER BY id"
+    ).fetchall()
+    thoughts = conn.execute(
+        "SELECT id, ts FROM entries WHERE kind IN ('journal', 'note', 'thought') "
+        "ORDER BY id"
+    ).fetchall()
+
+    with conn:
+        for row in checkins:
+            _award(conn, counts, "checkin", "checkin:%s" % row["date"], "Чек-ин дня",
+                   _practice_moment(_date.fromisoformat(str(row["date"])), 21))
+        for row in marks:
+            _award(
+                conn,
+                counts,
+                "habit",
+                "habit:%d:%s" % (int(row["habit_id"]), row["date"]),
+                "Привычка «%s»" % row["name"],
+                _practice_moment(_date.fromisoformat(str(row["date"])), 12),
+            )
+        for row in tasks:
+            moment = _row_moment(row["done"])
+            if moment is not None:
+                _award(
+                    conn,
+                    counts,
+                    "task",
+                    "task:%d" % int(row["id"]),
+                    "Дело: %s" % row["title"],
+                    moment,
+                )
+        for row in thoughts:
+            moment = _row_moment(row["ts"])
+            if moment is not None:
+                _award(
+                    conn,
+                    counts,
+                    "journal",
+                    "journal:%d" % int(row["id"]),
+                    "Запись в журнал",
+                    moment,
+                )
+
+
+def _row_moment(text: Any) -> datetime | None:
+    """Момент из ``ts``/``created``/``done_at``; нечитаемое время — ``None``."""
+    stamp = str(text or "").strip()
+    if not stamp:
+        return None
+    try:
+        moment = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = datetime.fromisoformat(moment.isoformat() + TZ_SUFFIX)
+    return moment
+
+
+def _award(
+    conn: sqlite3.Connection,
+    counts: dict[str, int],
+    kind: str,
+    ref_id: str,
+    reason: str,
+    moment: datetime,
+) -> None:
+    """Одно демо-начисление и учёт его в статистике сида."""
+    result = award_points(
+        conn, kind=kind, ref_id=ref_id, reason=reason, source=DEMO_SOURCE, now=moment
+    )
+    if int(result["awarded"]) > 0:
+        counts["points"] += 1
+        counts["points_balance"] += int(result["awarded"])
 
 
 def _build_reviews(

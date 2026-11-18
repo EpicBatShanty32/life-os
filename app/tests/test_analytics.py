@@ -298,8 +298,8 @@ def test_correlations_endpoint(settings) -> None:
     assert too_short.status_code == 422
 
 
-def test_overview_insight_reports_weak_correlation(settings) -> None:
-    """Слабые связи — это не «мало данных»: Обзор обязан сказать это честно."""
+def test_overview_insight_reports_unconfirmed_correlation(settings) -> None:
+    """Слабая связь — не «мало данных»: Обзор говорит о ней честно, без порога."""
     today = settings.now().date()
     connection = init_db(settings.db_path)
     with connection:
@@ -314,6 +314,9 @@ def test_overview_insight_reports_weak_correlation(settings) -> None:
 
     insight = payload["insight"]
     assert insight is not None
-    assert "Сон" in insight["title"] and "Настроение" in insight["title"]
-    assert "порог" in insight["footnote"]
-    assert "слабее порога" in insight["text"]
+    assert (insight["left"], insight["right"]) == ("sleep", "mood")
+    assert "Сон" in insight["title"] and "настроение" in insight["title"].lower()
+    assert "→" not in insight["title"]
+    assert "ложные находки" in insight["text"]
+    assert "ложные находки" in insight["footnote"]
+    assert "порог" not in insight["text"] + insight["footnote"]

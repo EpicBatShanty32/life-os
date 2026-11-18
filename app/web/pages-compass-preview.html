@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Life OS — предпросмотр «Компас» и «Дела»</title>
+    <style>
+      html, body { margin: 0; padding: 0; background: var(--bg, #f5f4f1); }
+      #root { min-height: 100vh; }
+      .pc-preview-shell { max-width: 1360px; margin: 0 auto; padding: 32px; }
+      @media (max-width: 760px) { .pc-preview-shell { padding: 16px; } }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/dev/pages-compass-preview.tsx"></script>
+  </body>
+</html>

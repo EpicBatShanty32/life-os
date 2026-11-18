@@ -48,6 +48,9 @@ export type IconName =
   | 'flame'
   | 'sync'
   | 'droplet'
+  | 'walk'
+  | 'stretch'
+  | 'sliders'
   | 'clock'
   | 'arrow-right'
   | 'arrow-left'
@@ -358,6 +361,32 @@ const PATHS: Record<IconName, ReactNode> = {
   ),
   command: (
     <path d="M9.1 6.2a2.9 2.9 0 1 0-2.9 2.9h11.6a2.9 2.9 0 1 0-2.9-2.9v11.6a2.9 2.9 0 1 0 2.9-2.9H6.2a2.9 2.9 0 1 0 2.9 2.9V6.2Z" />
+  ),
+  walk: (
+    <>
+      <circle cx="13.4" cy="4.7" r="1.8" />
+      <path d="m12.7 8.3-2.4 4.9 2.3 2.2-1.4 4.4" />
+      <path d="m10.3 13.2-3.3 2.4" />
+      <path d="m12.7 8.3 3.4 1.7 1.3 3.1" />
+    </>
+  ),
+  stretch: (
+    <>
+      <circle cx="12" cy="4.9" r="1.7" />
+      <path d="M12 7.6v4.2" />
+      <path d="M8.6 14.4h6.8" />
+      <path d="M8.6 14.4 5.8 19.5" />
+      <path d="m15.4 14.4 2.8 5.1" />
+      <path d="M12 11.8 9.4 9.4M12 11.8l2.6-2.4" />
+    </>
+  ),
+  sliders: (
+    <>
+      <path d="M4 7.4h16M4 12h16M4 16.6h16" />
+      <circle cx="9.2" cy="7.4" r="2.1" />
+      <circle cx="15" cy="12" r="2.1" />
+      <circle cx="8.2" cy="16.6" r="2.1" />
+    </>
   ),
   dot: <circle cx="12" cy="12" r="2.6" fill="currentColor" stroke="none" />,
 };

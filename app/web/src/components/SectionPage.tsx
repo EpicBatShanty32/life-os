@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { createGoal, markHabit, patchGoal, useSection } from '../api/sections';
 import type { SectionGoal, SectionHabit, SectionSeries } from '../api/sections';
 import { Icon } from './Icon';
+import { habitIcon } from '../lib/habitIcon';
 import type { IconName } from './Icon';
 import { KpiCard } from './KpiCard';
 import type { Accent } from '../lib/ui';
@@ -77,7 +78,7 @@ function HabitRows({
         return (
           <div className="habit" key={habit.id}>
             <span className="habit__emoji" aria-hidden="true">
-              {habit.emoji || '•'}
+              <Icon name={habitIcon(habit.emoji, habit.name)} size={17} />
             </span>
             <span className="habit__name">
               {habit.name}

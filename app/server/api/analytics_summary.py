@@ -2,9 +2,9 @@
 
 Одна точка для экрана «Аналитика»: энергия, баланс сфер, чтение, деньги,
 привычки, задачи и корреляции. Все ряды ограничены окном ``days`` (7..365),
-деньги — рубли, доли — 0..1. Корреляции не пересчитываются здесь заново:
-используется :func:`app.server.api.aggregates.build_correlations`, тот же
-расчёт, что у ``GET /api/analytics/correlations`` (его формат не меняется).
+деньги — рубли, доли — 0..1. Корреляции считаются тем же движком v2, что и
+``GET /api/analytics/correlations``/:func:`build_correlation_report`: в поле
+``correlations`` отдаются лучшие пары окна с лагами, p, q, силой и советом.
 
 Честность данных:
 
@@ -24,7 +24,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query
 
-from app.server.api.aggregates import build_correlations
+from app.server.api.aggregates import SERIES_LABELS, build_correlation_report
 from app.server.api.deps import ConnectionDep, SettingsDep
 
 __all__ = ["router"]
@@ -200,6 +200,84 @@ def _tasks(conn: Any, since: str, today: str) -> dict[str, Any]:
     }
 
 
+
+def _summary_pair(item: dict[str, Any]) -> dict[str, Any]:
+    """Пара в форме, которую уже понимает экран «Аналитика» (плюс поля v2)."""
+    ok = item["status"] == "ok"
+    return {
+        "left": item["left"],
+        "right": item["right"],
+        "label": item["label"],
+        "leftLabel": item["leftLabel"],
+        "rightLabel": item["rightLabel"],
+        "left_label": item["leftLabel"],
+        "right_label": item["rightLabel"],
+        "lag": item["lag"],
+        "n": item["n"],
+        "r": item["r"],
+        "rho": item["rho"],
+        "p": item["p"],
+        "q": item["q"],
+        "ci": item["ci"],
+        "effectPct": item["effectPct"],
+        "strength": item["strength"],
+        "status": item["status"],
+        "text": item["text"],
+        "sentence": item["sentence"],
+        "advice": item["advice"],
+        "enough_data": ok,
+        "enoughData": ok,
+    }
+
+
+def _summary_correlations(conn: Any, today_day: date, days: int) -> list[dict[str, Any]]:
+    """Лучшие (по |r|) пары окна; если считать нечего — честные отказы."""
+    report = build_correlation_report(conn, today_day, days=days, lags=2)
+    computed = [item for item in report["pairs"] if item["r"] is not None]
+    rows = [_summary_pair(item) for item in computed[:8]]
+    if rows:
+        return rows
+    for item in report["notReady"][:3]:
+        left = str(item["left"])
+        right = str(item["right"])
+        left_label = SERIES_LABELS.get(left, left)
+        right_label = SERIES_LABELS.get(right, right)
+        no_variance = item["reason"] == "no_variance"
+        text = (
+            "Показатель не меняется — корреляцию не посчитать"
+            if no_variance
+            else "Мало реальных дней: %d из %d"
+            % (int(item["daysHave"]), int(item["needDays"]))
+        )
+        rows.append(
+            {
+                "left": left,
+                "right": right,
+                "label": "%s ↔ %s" % (left_label, right_label),
+                "leftLabel": left_label,
+                "rightLabel": right_label,
+                "left_label": left_label,
+                "right_label": right_label,
+                "lag": 0,
+                "n": int(item["daysHave"]),
+                "r": None,
+                "rho": None,
+                "p": None,
+                "q": None,
+                "ci": None,
+                "effectPct": None,
+                "strength": None,
+                "status": "no_variance" if no_variance else "insufficient_data",
+                "text": text,
+                "sentence": "",
+                "advice": "Продолжайте записывать оба показателя: без данных связи не проверить.",
+                "enough_data": False,
+                "enoughData": False,
+            }
+        )
+    return rows
+
+
 @router.get("/analytics/summary")
 def analytics_summary(
     conn: ConnectionDep,
@@ -220,5 +298,5 @@ def analytics_summary(
         "finance": _finance(conn, since, today),
         "habits": _habits(conn, since, today, days),
         "tasks": _tasks(conn, since, today),
-        "correlations": build_correlations(conn, today_day, days=days),
+        "correlations": _summary_correlations(conn, today_day, days),
     }

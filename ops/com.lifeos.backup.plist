@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchAgent автобэкапа базы Life OS: com.lifeos.backup.
+
+  Шаблон; ставится через deploy/install-backup-agent.sh, который подставляет:
+    __PYTHON__   → путь к python3 (официальная сборка Python.framework)
+    __REPO__     → корень проекта
+    __LOG_DIR__  → корень проекта/data/logs
+    __DB_PATH__  → файл базы, который бэкапим
+    __BACKUP_DIR__ → каталог копий
+
+  Почему запускаем python, а не bash: macOS (TCC) не даёт фоновым заданиям
+  launchd читать папку «Документы», если задание запущено из /bin/bash —
+  процесс получает «Operation not permitted». Python из официальной сборки
+  идёт как приложение Python.app, и ему доступ разрешён. tools/backup_launcher.py
+  просто вызывает tools/backup.sh.
+
+  Что делает агент:
+    * каждую ночь в 04:00 по местному времени — копия базы;
+    * при входе в систему / загрузке мака (RunAtLoad) — тоже одна копия;
+    * пропущенный из-за сна запуск launchd выполнит при пробуждении;
+    * пишет свой вывод в data/logs/backup.launchd.log, журнал копий —
+      data/logs/backup.log.
+
+  Не редактируй установленный файл в ~/Library/LaunchAgents вручную: правь
+  этот шаблон и запускай deploy/install-backup-agent.sh заново.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>com.lifeos.backup</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>__PYTHON__</string>
+		<string>__REPO__/tools/backup_launcher.py</string>
+	</array>
+	<key>WorkingDirectory</key>
+	<string>__REPO__</string>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+		<key>LIFEOS_ROOT</key>
+		<string>__REPO__</string>
+		<key>LIFEOS_DB_PATH</key>
+		<string>__DB_PATH__</string>
+		<key>LIFEOS_BACKUP_DIR</key>
+		<string>__BACKUP_DIR__</string>
+		<key>LIFEOS_LOGS_DIR</key>
+		<string>__LOG_DIR__</string>
+	</dict>
+	<key>StartCalendarInterval</key>
+	<dict>
+		<key>Hour</key>
+		<integer>4</integer>
+		<key>Minute</key>
+		<integer>0</integer>
+	</dict>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>300</integer>
+	<key>StandardOutPath</key>
+	<string>__LOG_DIR__/backup.launchd.log</string>
+	<key>StandardErrorPath</key>
+	<string>__LOG_DIR__/backup.launchd.log</string>
+	<key>Umask</key>
+	<integer>63</integer>
+</dict>
+</plist>

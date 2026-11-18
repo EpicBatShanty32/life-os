@@ -45,13 +45,24 @@ __all__ = [
     "get_transcriber",
     "probe_duration",
     "probe_toolchain",
+    "resolve_engine",
     "toolchain_status",
     "transcribe",
+    "DisabledTranscriber",
+    "ENGINES",
+    "DEFAULT_ENGINE",
 ]
 
 STATUS_OK = "ok"
 STATUS_PENDING_TOOLCHAIN = "pending_toolchain"
 STATUS_ERROR = "error"
+
+#: Код результата, когда движок расшифровки выключен на этом устройстве.
+STATUS_DISABLED = "transcribe_disabled"
+
+#: Движки: ``off`` — не запускаем на этой машине, ``local`` — whisper здесь же.
+ENGINES = ("off", "local")
+DEFAULT_ENGINE = "off"
 
 DEFAULT_LANGUAGE = "ru"
 
@@ -100,6 +111,36 @@ class NullTranscriber(Transcriber):
             reason=_pending_reason(missing),
             missing=missing,
             toolchain="none",
+        )
+
+
+class DisabledTranscriber(Transcriber):
+    """Расшифровка выключена на этом устройстве (``transcribe.engine = off``).
+
+    Ничего не запускает и не ищет: файл остаётся в хранилище, задача получает
+    ``pending_toolchain`` с честной причиной «выключено», а не «чего-то не хватает».
+    """
+
+    name = "off"
+
+    def __init__(self, engine: str = DEFAULT_ENGINE) -> None:
+        self.engine = engine
+
+    def available(self) -> bool:
+        return False
+
+    def transcribe(self, path: PathLike) -> Dict[str, Any]:
+        invalid = _validate_path(path)
+        if invalid is not None:
+            return invalid
+        return _result(
+            False,
+            STATUS_PENDING_TOOLCHAIN,
+            STATUS_DISABLED,
+            reason=_disabled_reason(self.engine),
+            missing=[],
+            toolchain="none",
+            engine=self.engine,
         )
 
 
@@ -258,9 +299,28 @@ def probe_toolchain(env: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
     }
 
 
-def toolchain_status(env: Optional[Mapping[str, str]] = None) -> Dict[str, Any]:
-    """Статус для UI/API: готова ли транскрибация и что именно отсутствует."""
+def toolchain_status(
+    env: Optional[Mapping[str, str]] = None,
+    engine: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Статус для UI/API: включён ли движок и что именно отсутствует.
+
+    Ключи ``engine`` (``off``/``local``) и ``enabled`` (запускаем ли на этой
+    машине) добавлены, чтобы бот не врал про «не хватает ffmpeg», когда
+    расшифровка просто выключена.
+    """
+    engine_name = resolve_engine(engine, env)
     info = dict(probe_toolchain(env=env))
+    info["engine"] = engine_name
+    info["enabled"] = engine_name == "local"
+    if not info["enabled"]:
+        info["ready"] = False
+        info["status"] = STATUS_PENDING_TOOLCHAIN
+        info["reason"] = _disabled_reason(engine_name)
+        # «Не хватает ffmpeg» здесь было бы неправдой: его никто не просил.
+        # Сами пути (ffmpeg/whisper/model) остаются в словаре для диагностики.
+        info["missing"] = []
+        return info
     info["status"] = STATUS_OK if info["ready"] else STATUS_PENDING_TOOLCHAIN
     info["reason"] = "" if info["ready"] else _pending_reason(info["missing"])
     return info
@@ -345,8 +405,37 @@ def probe_duration(
     return _as_float(raw)
 
 
-def get_transcriber(probe: Optional[Any] = None) -> Transcriber:
-    """Выбирает рабочую реализацию: whisper при полном toolchain, иначе null."""
+def resolve_engine(
+    engine: Optional[str] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> str:
+    """Имя движка: аргумент, затем ``LIFEOS_TRANSCRIBE_ENGINE``, затем ``off``.
+
+    Неизвестное значение трактуется как ``off``: расшифровка не запускается
+    сама собой из-за опечатки в конфиге.
+    """
+    raw: Optional[str] = engine
+    if raw is None:
+        environment = os.environ if env is None else env
+        raw = environment.get("LIFEOS_TRANSCRIBE_ENGINE")
+    value = str(raw or "").strip().lower()
+    return value if value in ENGINES else DEFAULT_ENGINE
+
+
+def get_transcriber(
+    probe: Optional[Any] = None,
+    engine: Optional[str] = None,
+) -> Transcriber:
+    """Выбирает рабочую реализацию по движку из настроек.
+
+    ``off`` (по умолчанию) — :class:`DisabledTranscriber`: на этой машине ничего
+    не считается и не устанавливается. ``local`` — whisper при полном
+    toolchain, иначе null с честным ``pending_toolchain``.
+    """
+    engine_name = resolve_engine(engine)
+    if engine_name != "local":
+        return DisabledTranscriber(engine=engine_name)
+
     probe_fn = probe or probe_toolchain
     info = probe_fn()
     if not info.get("ready"):
@@ -362,10 +451,15 @@ def transcribe(
     path: PathLike,
     transcriber: Optional[Transcriber] = None,
     probe: Optional[Any] = None,
+    engine: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Транскрибирует файл и никогда не бросает исключение наружу."""
     try:
-        worker = transcriber if transcriber is not None else get_transcriber(probe=probe)
+        worker = (
+            transcriber
+            if transcriber is not None
+            else get_transcriber(probe=probe, engine=engine)
+        )
         return worker.transcribe(path)
     except Exception as exc:
         return _result(
@@ -447,6 +541,14 @@ def _result(
     }
     result.update(extra)
     return result
+
+
+def _disabled_reason(engine: str = DEFAULT_ENGINE) -> str:
+    return (
+        "Расшифровка голоса выключена на этом устройстве (transcribe.engine = %s): "
+        "текст не создаётся, файл остаётся в хранилище. Задачи с расшифровкой "
+        "ждут, пока движок не включат (transcribe.engine = local)." % engine
+    )
 
 
 def _pending_reason(missing: Optional[List[str]]) -> str:

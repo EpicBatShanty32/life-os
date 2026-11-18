@@ -197,8 +197,8 @@ def test_pwa_manifest_source_is_valid() -> None:
     assert manifest["short_name"] == "Life OS"
     assert manifest["lang"] == "ru"
     assert manifest["display"] == "standalone"
-    assert manifest["theme_color"].upper() == "#F6F7FB"
-    assert manifest["start_url"].endswith("#/today")
+    assert manifest["theme_color"].upper() == "#F5F4F1"
+    assert manifest["start_url"].endswith("#/")
     assert len(manifest["icons"]) >= 3
     assert any(icon.get("purpose") == "maskable" for icon in manifest["icons"])
     assert manifest["shortcuts"]
@@ -214,7 +214,7 @@ def test_pwa_icons_are_real_png() -> None:
 
 def test_service_worker_caches_shell_and_bypasses_api() -> None:
     source = (PUBLIC / "sw.js").read_text(encoding="utf-8")
-    assert "lifeos-v3" in source
+    assert "lifeos-v4" in source
     assert "offline.html" in source
     assert "manifest.webmanifest" in source
     assert "skipWaiting" in source

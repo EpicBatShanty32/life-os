@@ -16,17 +16,27 @@ import { useTheme } from './lib/theme';
 import { toast } from './lib/toast';
 import { Analytics } from './pages/Analytics';
 import { Body } from './pages/Body';
+import { Compass } from './pages/Compass';
 import { Courses } from './pages/Courses';
+import { Finance } from './pages/Finance';
 import { Goals } from './pages/Goals';
 import { Habits } from './pages/Habits';
+import { Inbox } from './pages/Inbox';
 import { Journal } from './pages/Journal';
+import { Library } from './pages/Library';
 import { Mood } from './pages/Mood';
 import { NotFound } from './pages/NotFound';
 import { Nutrition } from './pages/Nutrition';
 import { Overview } from './pages/Overview';
+import { Personal } from './pages/Personal';
+import { Practices } from './pages/Practices';
+import { Projects } from './pages/Projects';
+import { Review } from './pages/Review';
 import { Settings } from './pages/Settings';
 import { Sleep } from './pages/Sleep';
 import { Today } from './pages/Today';
+import { Week } from './pages/Week';
+import { Usage } from './pages/Usage';
 import { Workouts } from './pages/Workouts';
 
 /**
@@ -35,16 +45,26 @@ import { Workouts } from './pages/Workouts';
  */
 const PAGE_COMPONENTS: Readonly<Record<string, ComponentType>> = {
   '/today': Today,
+  '/week': Week,
+  '/compass': Compass,
+  '/inbox': Inbox,
+  '/projects': Projects,
+  '/library': Library,
+  '/finance': Finance,
   '/goals': Goals,
   '/habits': Habits,
   '/body': Body,
   '/sleep': Sleep,
   '/workouts': Workouts,
   '/nutrition': Nutrition,
+  '/practices': Practices,
   '/courses': Courses,
   '/journal': Journal,
   '/mood': Mood,
   '/analytics': Analytics,
+  '/usage': Usage,
+  '/personal': Personal,
+  '/review': Review,
   '/settings': Settings,
 };
 
@@ -162,6 +182,7 @@ export default function App() {
         sync={overview.data?.sync ?? null}
         refreshing={overview.refreshing}
         onRefresh={handleRefresh}
+        onOpenSearch={openPalette}
       />
 
       <div className="app__main">
